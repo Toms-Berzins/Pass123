@@ -36,6 +36,15 @@ let genMode: 'password' | 'passphrase' = 'password'
 let lastGenerated = ''
 let settingsCache: Settings = { ...DEFAULT_SETTINGS }
 
+/** Passphrase separator options, rendered as the square chip picker. */
+const SEPARATORS: { value: string; glyph: string; label: string }[] = [
+  { value: '-', glyph: '-', label: 'Hyphen' },
+  { value: '.', glyph: '.', label: 'Dot' },
+  { value: ' ', glyph: '␣', label: 'Space' },
+  { value: '_', glyph: '_', label: 'Underscore' },
+  { value: '', glyph: '∅', label: 'None' },
+]
+
 // One shared 1s ticker drives every visible TOTP display; entries unmounted from
 // the DOM are dropped automatically so re-renders never leak intervals.
 interface TotpDisplay {
@@ -145,6 +154,10 @@ function renderSetup(): void {
 // ---------- Unlock ----------
 function renderUnlock(): void {
   app.innerHTML = `
+    <div class="lock-hero">
+      <div class="lock-badge">${ICON.lock}</div>
+      <p class="lock-sub">Enter your master password to unlock</p>
+    </div>
     <div>
       <label for="mp">Master password</label>
       <input id="mp" type="password" autocomplete="current-password" />
@@ -330,19 +343,25 @@ function renderMain(tab: Tab = 'gen'): void {
 function renderGenerator(): void {
   const view = byId<HTMLDivElement>('view')
   view.innerHTML = `
-    <div class="tabs" style="margin-bottom:2px">
+    <div class="tabs">
       <button id="mode-password" class="${genMode === 'password' ? 'active' : ''}">Password</button>
       <button id="mode-passphrase" class="${genMode === 'passphrase' ? 'active' : ''}">Passphrase</button>
     </div>
-    <div class="gen-output" id="out">${lastGenerated || '—'}</div>
+    <div class="gen-output">
+      <span class="gen-output-text" id="out">${escapeHtml(lastGenerated) || '—'}</span>
+      <div class="gen-output-actions">
+        <button id="regenIcon" class="well-icon" title="Generate" aria-label="Generate new value">${ICON.refresh}</button>
+        <button id="copyIcon" class="well-icon" title="Copy" aria-label="Copy to clipboard">${ICON.copy}</button>
+      </div>
+    </div>
     <div class="meter"><span id="meter"></span></div>
     <p class="hint" id="entropy"></p>
+    <div id="controls"></div>
     <div class="row">
       <button id="regen">Generate</button>
       <button id="copy" class="ghost">Copy</button>
     </div>
-    <div id="controls"></div>
-    <button id="saveGen" class="ghost small">Save to vault →</button>
+    <button id="saveGen" class="link save-to-vault">Save to vault →</button>
   `
   const out = byId<HTMLDivElement>('out')
   const meter = byId<HTMLSpanElement>('meter')
@@ -361,7 +380,8 @@ function renderGenerator(): void {
       const s = strengthFromEntropy(bits)
       meter.className = `s-${s}`
       meter.style.width = `${Math.min(100, (bits / 128) * 100)}%`
-      byId<HTMLParagraphElement>('entropy').textContent = `~${bits} bits • ${s}`
+      const detail = genMode === 'passphrase' ? ` • ${passOptions.words} words` : ''
+      byId<HTMLParagraphElement>('entropy').textContent = `~${bits} bits • ${s}${detail}`
     } catch (e) {
       out.textContent = (e as Error).message
     }
@@ -373,7 +393,7 @@ function renderGenerator(): void {
       controls.innerHTML = `
         <div>
           <label for="len">Length: <b id="lenVal">${genOptions.length}</b></label>
-          <input id="len" type="range" min="8" max="64" value="${genOptions.length}" style="width:100%" />
+          <input id="len" class="slider" type="range" min="8" max="64" value="${genOptions.length}" />
         </div>
         <div class="checks">
           ${checkbox('lowercase', 'a-z')}
@@ -385,9 +405,11 @@ function renderGenerator(): void {
       `
       const len = byId<HTMLInputElement>('len')
       const lenVal = byId<HTMLElement>('lenVal')
+      setSliderFill(len)
       len.addEventListener('input', () => {
         genOptions.length = Number(len.value)
         lenVal.textContent = len.value
+        setSliderFill(len)
         refresh()
       })
       for (const key of ['lowercase', 'uppercase', 'numbers', 'symbols', 'excludeAmbiguous'] as const) {
@@ -401,15 +423,16 @@ function renderGenerator(): void {
       controls.innerHTML = `
         <div>
           <label for="words">Words: <b id="wordsVal">${passOptions.words}</b></label>
-          <input id="words" type="range" min="3" max="10" value="${passOptions.words}" style="width:100%" />
+          <input id="words" class="slider" type="range" min="3" max="10" value="${passOptions.words}" />
         </div>
-        <div>
-          <label for="sep">Separator</label>
-          <select id="sep">
-            ${[['-', 'hyphen -'], ['.', 'dot .'], [' ', 'space'], ['_', 'underscore _'], ['', 'none']]
-              .map(([v, t]) => `<option value="${attr(v)}" ${v === sep ? 'selected' : ''}>${t}</option>`)
-              .join('')}
-          </select>
+        <div class="spread">
+          <label>Separator</label>
+          <div class="seg-chips" id="sep" role="group" aria-label="Separator">
+            ${SEPARATORS.map(
+              (s) =>
+                `<button type="button" class="seg-chip ${s.value === sep ? 'active' : ''}" data-sep="${attr(s.value)}" title="${attr(s.label)}" aria-label="${attr(s.label)}" aria-pressed="${s.value === sep}">${escapeHtml(s.glyph)}</button>`,
+            ).join('')}
+          </div>
         </div>
         <div class="checks">
           <label class="check"><input type="checkbox" id="pp-capitalize" ${passOptions.capitalize ? 'checked' : ''} /> Capitalize</label>
@@ -418,15 +441,25 @@ function renderGenerator(): void {
       `
       const words = byId<HTMLInputElement>('words')
       const wordsVal = byId<HTMLElement>('wordsVal')
+      setSliderFill(words)
       words.addEventListener('input', () => {
         passOptions.words = Number(words.value)
         wordsVal.textContent = words.value
+        setSliderFill(words)
         refresh()
       })
-      byId<HTMLSelectElement>('sep').addEventListener('change', (e) => {
-        passOptions.separator = (e.target as HTMLSelectElement).value
-        refresh()
-      })
+      const sepGroup = byId<HTMLDivElement>('sep')
+      for (const chip of sepGroup.querySelectorAll<HTMLButtonElement>('.seg-chip')) {
+        chip.addEventListener('click', () => {
+          passOptions.separator = chip.dataset.sep ?? ''
+          for (const c of sepGroup.querySelectorAll<HTMLButtonElement>('.seg-chip')) {
+            const on = c === chip
+            c.classList.toggle('active', on)
+            c.setAttribute('aria-pressed', String(on))
+          }
+          refresh()
+        })
+      }
       byId<HTMLInputElement>('pp-capitalize').addEventListener('change', (e) => {
         passOptions.capitalize = (e.target as HTMLInputElement).checked
         refresh()
@@ -447,8 +480,12 @@ function renderGenerator(): void {
   }
   byId<HTMLButtonElement>('mode-password').addEventListener('click', () => setMode('password'))
   byId<HTMLButtonElement>('mode-passphrase').addEventListener('click', () => setMode('passphrase'))
+  const doCopy = () =>
+    copySecret(lastGenerated, genMode === 'password' ? 'Password copied' : 'Passphrase copied')
   byId<HTMLButtonElement>('regen').addEventListener('click', refresh)
-  byId<HTMLButtonElement>('copy').addEventListener('click', () => copySecret(lastGenerated, 'Password copied'))
+  byId<HTMLButtonElement>('regenIcon').addEventListener('click', refresh)
+  byId<HTMLButtonElement>('copy').addEventListener('click', doCopy)
+  byId<HTMLButtonElement>('copyIcon').addEventListener('click', doCopy)
   byId<HTMLButtonElement>('saveGen').addEventListener('click', () => renderEntryForm(undefined, lastGenerated))
 
   drawControls()
@@ -536,26 +573,83 @@ async function activeTabHostname(): Promise<string> {
   }
 }
 
+/** Two-letter badge initials from an entry's title/host (e.g. "github.com" → "GI"). */
+function entryInitials(e: VaultEntry): string {
+  const base = (e.title || e.url || '?').replace(/^https?:\/\//, '').replace(/^www\./, '')
+  const letters = base.replace(/[^a-z0-9]/gi, '')
+  return (letters.slice(0, 2) || '?').toUpperCase()
+}
+
+/** Coarse "Nd ago" relative time for the entry meta line. */
+function relativeTime(ts: number): string {
+  const diff = Math.max(0, Date.now() - ts)
+  const min = 60_000, hour = 60 * min, day = 24 * hour
+  if (diff < hour) return `${Math.max(1, Math.floor(diff / min))}m ago`
+  if (diff < day) return `${Math.floor(diff / hour)}h ago`
+  const days = Math.floor(diff / day)
+  if (days < 30) return `${days}d ago`
+  const months = Math.floor(days / 30)
+  return months < 12 ? `${months}mo ago` : `${Math.floor(months / 12)}y ago`
+}
+
 function entryCard(e: VaultEntry): HTMLElement {
   const el = document.createElement('div')
   el.className = 'entry'
   el.innerHTML = `
-    <div class="spread">
-      <span class="title">${escapeHtml(e.title || e.url || 'Untitled')}</span>
-      <div class="row" style="flex:0 0 auto;gap:4px">
-        <button class="ghost small" data-act="copyUser">User</button>
-        <button class="small" data-act="copyPass">Copy</button>
+    <div class="entry-head" data-act="toggle">
+      <div class="entry-icon">${escapeHtml(entryInitials(e))}</div>
+      <div class="entry-headtext">
+        <div class="entry-titlerow">
+          <span class="title">${escapeHtml(e.title || e.url || 'Untitled')}</span>
+          <span class="entry-tag">Login</span>
+        </div>
+        <div class="entry-meta">${e.url ? escapeHtml(e.url) + ' · ' : ''}updated ${escapeHtml(relativeTime(e.updatedAt))}</div>
       </div>
+      <span class="well-icon entry-chevron">${ICON.chevron}</span>
     </div>
-    <span class="sub">${escapeHtml(e.username)}${e.url ? ' • ' + escapeHtml(e.url) : ''}</span>
-    ${e.totp ? totpRowHtml() : ''}
-    <div class="row" style="gap:4px">
-      <button class="ghost small" data-act="fill">Autofill</button>
-      <button class="ghost small" data-act="edit">Edit</button>
-      <button class="danger small" data-act="del">Delete</button>
+    <div class="entry-body">
+      <div class="entry-fields">
+        <div class="entry-field">
+          <span class="field-label">User</span>
+          <span class="field-val">${escapeHtml(e.username) || '<span style="opacity:.5">—</span>'}</span>
+          <button class="field-icon" data-act="copyUser" title="Copy username" aria-label="Copy username">${ICON.copy}</button>
+        </div>
+        <div class="entry-field">
+          <span class="field-label">Pass</span>
+          <span class="field-val pass-val" data-pass>••••••••</span>
+          <button class="field-icon" data-act="reveal" title="Reveal password" aria-label="Reveal password">${ICON.eyeOff}</button>
+          <button class="field-icon" data-act="copyPass" title="Copy password" aria-label="Copy password">${ICON.copy}</button>
+        </div>
+      </div>
+      ${e.totp ? totpRowHtml() : ''}
+      <div class="entry-actions">
+        <button class="small" data-act="fill">Autofill</button>
+        <button class="ghost small" data-act="edit">Edit</button>
+        <button class="danger small entry-del" data-act="del" title="Delete" aria-label="Delete">${ICON.trash}</button>
+      </div>
     </div>
   `
   if (e.totp) mountTotpRow(el, e.totp)
+
+  el.querySelector('.entry-head')!.addEventListener('click', () => el.classList.toggle('expanded'))
+
+  // Inline password reveal, gated by the same master-password challenge as the form.
+  const passEl = el.querySelector<HTMLElement>('[data-pass]')!
+  const revealBtn = el.querySelector<HTMLButtonElement>('[data-act="reveal"]')!
+  let needsVerify = Boolean(e.password)
+  const setRevealed = (on: boolean): void => {
+    passEl.textContent = on ? e.password || '—' : '••••••••'
+    passEl.classList.toggle('revealed', on)
+    revealBtn.innerHTML = on ? ICON.eye : ICON.eyeOff
+    revealBtn.title = revealBtn.ariaLabel = on ? 'Hide password' : 'Reveal password'
+  }
+  revealBtn.addEventListener('click', async () => {
+    if (passEl.classList.contains('revealed')) return setRevealed(false)
+    if (needsVerify && !(await promptMasterVerify(el))) return
+    needsVerify = false
+    setRevealed(true)
+  })
+
   el.querySelector('[data-act="copyUser"]')!.addEventListener('click', () => copySecret(e.username, 'Username copied'))
   el.querySelector('[data-act="copyPass"]')!.addEventListener('click', () => copySecret(e.password, 'Password copied'))
   el.querySelector('[data-act="fill"]')!.addEventListener('click', () => autofill(e))
@@ -701,6 +795,15 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
 }
 
 // ---------- Settings ----------
+/** Markup for a pill toggle switch wrapping a real checkbox (id drives the change handler). */
+function toggleRow(id: string, label: string, checked: boolean): string {
+  return `<label class="toggle">
+    <input id="${id}" type="checkbox" ${checked ? 'checked' : ''} />
+    <span class="toggle-track"></span>
+    <span class="toggle-text">${escapeHtml(label)}</span>
+  </label>`
+}
+
 function renderSettings(): void {
   const view = byId<HTMLDivElement>('view')
   const s = settingsCache
@@ -709,36 +812,32 @@ function renderSettings(): void {
       <label for="set-lock">Auto-lock after (minutes)</label>
       <input id="set-lock" type="number" min="1" max="240" value="${s.autoLockMinutes}" />
     </div>
-    <label class="check" style="margin-top:4px">
-      <input id="set-capture" type="checkbox" ${s.captureEnabled ? 'checked' : ''} />
-      Offer to save passwords after login
-    </label>
+    ${toggleRow('set-capture', 'Offer to save passwords after login', s.captureEnabled)}
     <div>
       <label for="set-clip">Clear clipboard after (seconds, 0 = never)</label>
       <input id="set-clip" type="number" min="0" max="600" value="${s.clipboardClearSeconds}" />
     </div>
     <p id="set-status" class="hint"></p>
 
-    <hr style="border:none;border-top:1px solid var(--border);margin:6px 0" />
-    <label>Recovery phrase</label>
+    <hr style="border:none;border-top:1px solid var(--border-soft);margin:0" />
+    <p class="step">Recovery phrase</p>
     <p id="rec-state" class="hint">Checking…</p>
     <div id="rec-action"></div>
 
-    <hr style="border:none;border-top:1px solid var(--border);margin:6px 0" />
-    <label>Biometric unlock</label>
-    <p id="bio-state" class="hint">Checking…</p>
+    <hr style="border:none;border-top:1px solid var(--border-soft);margin:0" />
     <div id="bio-action"></div>
+    <p id="bio-state" class="hint">Checking…</p>
 
-    <hr style="border:none;border-top:1px solid var(--border);margin:6px 0" />
-    <label>Backup &amp; restore</label>
+    <hr style="border:none;border-top:1px solid var(--border-soft);margin:0" />
+    <p class="step">Backup &amp; restore</p>
     <p class="hint">An encrypted backup file you can store anywhere — protected by a separate export password.</p>
     <div class="row">
       <button id="export-btn" class="ghost small">Export…</button>
       <button id="import-btn" class="ghost small">Import…</button>
     </div>
 
-    <hr style="border:none;border-top:1px solid var(--border);margin:6px 0" />
-    <label style="color:var(--danger)">Danger zone</label>
+    <hr style="border:none;border-top:1px solid var(--border-soft);margin:0" />
+    <p class="step" style="color:var(--danger)">Danger zone</p>
     <button id="del-vault" class="danger">Delete vault…</button>
     <p class="hint">Permanently erases all saved passwords. This cannot be undone.</p>
   `
@@ -899,18 +998,17 @@ async function renderBiometricSetting(): Promise<void> {
   state.textContent = enabled
     ? `${biometricName()} unlock is on. Your vault key is wrapped by this device's authenticator.`
     : `Unlock with ${biometricName()} instead of typing your master password.`
-  const btn = document.createElement('button')
-  btn.className = 'ghost small'
-  btn.textContent = enabled ? `Turn off ${biometricName()} unlock` : `Enable ${biometricName()} unlock`
-  btn.addEventListener('click', async () => {
+  action.innerHTML = toggleRow('set-bio', `${biometricName()} unlock`, enabled)
+  byId<HTMLInputElement>('set-bio').addEventListener('change', async () => {
     if (enabled) {
       await sendMessage({ type: 'removeBiometric' })
       void renderBiometricSetting()
     } else {
+      // Enrolling needs the master password + an authenticator prompt, so hand off to
+      // a dedicated screen; cancelling returns to Settings (which re-syncs the toggle).
       renderEnableBiometric()
     }
   })
-  action.appendChild(btn)
 }
 
 /** Confirm the master password, then enroll a platform credential and wrap the vault key. */
@@ -1201,6 +1299,14 @@ function wireStrengthMeter(input: HTMLInputElement, meter: HTMLElement, label: H
   update()
 }
 
+/** Paint the green fill of a custom range slider from its current value. */
+function setSliderFill(el: HTMLInputElement): void {
+  const min = Number(el.min || 0)
+  const max = Number(el.max || 100)
+  const pct = max === min ? 0 : ((Number(el.value) - min) / (max - min)) * 100
+  el.style.setProperty('--pct', `${pct}%`)
+}
+
 function checkbox(key: keyof GeneratorOptions, label: string): string {
   return `<label class="check"><input type="checkbox" id="chk-${key}" ${
     genOptions[key] ? 'checked' : ''
@@ -1231,6 +1337,10 @@ const ICON = {
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 10.6a3 3 0 0 0 4.2 4.2"/><path d="M9.9 4.6A11 11 0 0 1 12 4.5c6.4 0 10 7 10 7a18 18 0 0 1-3.2 4.1M6.1 6.1A18 18 0 0 0 2 11.5s3.6 7 10 7a11 11 0 0 0 3.1-.4"/></svg>',
   refresh:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>',
 }
 
 /** Wrap a password input with an inline reveal/hide eye toggle. */

@@ -1,8 +1,10 @@
+/* global Buffer, console */
 /**
  * Generates Pass123 action icons (16/48/128 px) as PNGs into public/icons/,
  * using only Node built-ins — no image dependencies.
  *
- * Design: a rounded-square in the brand accent gradient with a white keyhole.
+ * Design: a rounded-square in the brand signal-green gradient with a dark keyhole
+ * (matches the Hi-Fi lock badge — green tile, near-black glyph).
  * Run: node scripts/gen-icons.mjs
  */
 import { deflateSync } from 'node:zlib'
@@ -13,9 +15,9 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = resolve(__dirname, '..', 'public', 'icons')
 
-const ACCENT_A = [108, 140, 255] // #6c8cff
-const ACCENT_B = [90, 120, 230] // #5a78e6
-const WHITE = [255, 255, 255]
+const ACCENT_A = [57, 255, 110] // #39ff6e (signal green)
+const ACCENT_B = [43, 212, 87] // #2bd457 (deeper green)
+const GLYPH = [9, 9, 15] // #09090f near-black keyhole
 const SS = 4 // supersampling factor for smooth edges
 
 const lerp = (a, b, t) => a + (b - a) * t
@@ -50,7 +52,7 @@ function sample(fx, fy, N) {
     const hw = lerp(N * 0.045, N * 0.085, (fy - stemTop) / (stemBot - stemTop))
     inStem = Math.abs(fx - kx) <= hw
   }
-  if (inCircle || inStem) col = [...WHITE]
+  if (inCircle || inStem) col = [...GLYPH]
 
   return [col[0], col[1], col[2], 255]
 }
