@@ -34,6 +34,8 @@ export interface VaultEntry {
   username: string
   password: string
   notes: string
+  /** Optional TOTP/2FA shared secret (base32). Rides the same AES-GCM envelope. */
+  totp?: string
   createdAt: number
   updatedAt: number
 }

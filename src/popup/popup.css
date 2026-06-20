@@ -115,6 +115,26 @@ button.small { padding: 6px 9px; font-size: 12px; }
 .entry .title { font-weight: 600; }
 .entry .sub { color: var(--muted); font-size: 12px; word-break: break-all; }
 
+.totp {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.totp-label { color: var(--muted); font-size: 10px; letter-spacing: 0.5px; }
+.totp-code {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 16px;
+  letter-spacing: 1px;
+  color: var(--strong);
+  flex: 1;
+}
+.totp-left { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.totp-left.expiring { color: var(--danger); }
+
 .empty { color: var(--muted); text-align: center; padding: 18px 0; font-size: 13px; }
 .error { color: var(--danger); font-size: 12px; }
 .hint { color: var(--muted); font-size: 11px; }

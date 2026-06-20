@@ -2,6 +2,12 @@ import './popup.css'
 import { sendMessage, type StatusResponse } from '../lib/messages'
 import type { VaultEntry } from '../lib/vault'
 import {
+  generateTOTP,
+  isValidTOTPSecret,
+  normalizeTOTPSecret,
+  parseTOTPUri,
+} from '../lib/totp'
+import {
   DEFAULT_OPTIONS,
   DEFAULT_PASSPHRASE,
   entropyBits,
@@ -23,6 +29,41 @@ let passOptions: PassphraseOptions = { ...DEFAULT_PASSPHRASE }
 let genMode: 'password' | 'passphrase' = 'password'
 let lastGenerated = ''
 let settingsCache: Settings = { ...DEFAULT_SETTINGS }
+
+// One shared 1s ticker drives every visible TOTP display; entries unmounted from
+// the DOM are dropped automatically so re-renders never leak intervals.
+interface TotpDisplay {
+  el: HTMLElement
+  secret: string
+  update: (code: string, remaining: number) => void
+}
+const totpDisplays = new Set<TotpDisplay>()
+let totpTimer: number | null = null
+
+function registerTotp(d: TotpDisplay): void {
+  totpDisplays.add(d)
+  void tickTotp()
+  if (totpTimer === null) totpTimer = setInterval(() => void tickTotp(), 1000) as unknown as number
+}
+
+async function tickTotp(): Promise<void> {
+  for (const d of totpDisplays) {
+    if (!d.el.isConnected) {
+      totpDisplays.delete(d)
+      continue
+    }
+    try {
+      const { code, remainingSeconds } = await generateTOTP({ secret: d.secret })
+      d.update(code, remainingSeconds)
+    } catch {
+      d.el.textContent = 'bad TOTP secret'
+    }
+  }
+  if (totpDisplays.size === 0 && totpTimer !== null) {
+    clearInterval(totpTimer)
+    totpTimer = null
+  }
+}
 
 lockBtn.addEventListener('click', async () => {
   await sendMessage({ type: 'lock' })
@@ -395,12 +436,14 @@ function entryCard(e: VaultEntry): HTMLElement {
       </div>
     </div>
     <span class="sub">${escapeHtml(e.username)}${e.url ? ' • ' + escapeHtml(e.url) : ''}</span>
+    ${e.totp ? totpRowHtml() : ''}
     <div class="row" style="gap:4px">
       <button class="ghost small" data-act="fill">Autofill</button>
       <button class="ghost small" data-act="edit">Edit</button>
       <button class="danger small" data-act="del">Delete</button>
     </div>
   `
+  if (e.totp) mountTotpRow(el, e.totp)
   el.querySelector('[data-act="copyUser"]')!.addEventListener('click', () => copySecret(e.username))
   el.querySelector('[data-act="copyPass"]')!.addEventListener('click', () => copySecret(e.password))
   el.querySelector('[data-act="fill"]')!.addEventListener('click', () => autofill(e))
@@ -410,6 +453,36 @@ function entryCard(e: VaultEntry): HTMLElement {
     void renderVault()
   })
   return el
+}
+
+/** Markup for the live 2FA row inside an entry card. */
+function totpRowHtml(): string {
+  return `
+    <div class="totp" data-totp>
+      <span class="totp-label">2FA</span>
+      <span class="totp-code" data-totp-code>••• •••</span>
+      <span class="totp-left" data-totp-left></span>
+      <button class="ghost small" data-act="copyTotp" style="flex:0 0 auto">Copy</button>
+    </div>`
+}
+
+/** Wire an entry card's TOTP row into the shared ticker and copy button. */
+function mountTotpRow(card: HTMLElement, secret: string): void {
+  const row = card.querySelector<HTMLElement>('[data-totp]')!
+  const codeEl = card.querySelector<HTMLElement>('[data-totp-code]')!
+  const leftEl = card.querySelector<HTMLElement>('[data-totp-left]')!
+  let current = ''
+  registerTotp({
+    el: row,
+    secret,
+    update: (code, remaining) => {
+      current = code
+      codeEl.textContent = code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code
+      leftEl.textContent = `${remaining}s`
+      leftEl.classList.toggle('expiring', remaining <= 5)
+    },
+  })
+  card.querySelector('[data-act="copyTotp"]')!.addEventListener('click', () => copySecret(current))
 }
 
 function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
@@ -425,6 +498,9 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
         <button id="f-gen" class="ghost small" style="flex:0 0 auto">⟳</button>
       </div>
     </div>
+    <div><label>2FA secret or otpauth:// URI <span class="hint">(optional)</span></label>
+      <input id="f-totp" type="text" placeholder="JBSW Y3DP… or otpauth://…" value="${attr(e?.totp)}" />
+    </div>
     <div><label>Notes</label><textarea id="f-notes">${escapeHtml(e?.notes ?? '')}</textarea></div>
     <p id="err" class="error"></p>
     <div class="row">
@@ -437,20 +513,35 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
   })
   byId<HTMLButtonElement>('cancel').addEventListener('click', () => renderMain('vault'))
   byId<HTMLButtonElement>('save').addEventListener('click', async () => {
+    const err = byId<HTMLParagraphElement>('err')
+    let totp: string | undefined
+    const totpRaw = byId<HTMLInputElement>('f-totp').value.trim()
+    if (totpRaw) {
+      try {
+        // Accept either a full otpauth:// URI (extract the secret) or a bare base32 secret.
+        totp = totpRaw.toLowerCase().startsWith('otpauth://')
+          ? parseTOTPUri(totpRaw).secret
+          : normalizeTOTPSecret(totpRaw)
+      } catch {
+        return (err.textContent = "Couldn't read that 2FA URI.")
+      }
+      if (!isValidTOTPSecret(totp)) return (err.textContent = 'Invalid 2FA secret (need 16+ base32 chars, A–Z 2–7).')
+    }
     const payload = {
       title: byId<HTMLInputElement>('f-title').value.trim(),
       url: byId<HTMLInputElement>('f-url').value.trim(),
       username: byId<HTMLInputElement>('f-user').value.trim(),
       password: byId<HTMLInputElement>('f-pass').value,
       notes: byId<HTMLTextAreaElement>('f-notes').value,
+      totp,
     }
     if (!payload.title && !payload.url) {
-      return (byId<HTMLParagraphElement>('err').textContent = 'Add a title or URL.')
+      return (err.textContent = 'Add a title or URL.')
     }
     const res = e
       ? await sendMessage({ type: 'update', entry: { ...e, ...payload } })
       : await sendMessage({ type: 'add', entry: payload })
-    if (!res.ok) return (byId<HTMLParagraphElement>('err').textContent = res.error)
+    if (!res.ok) return (err.textContent = res.error)
     renderMain('vault')
   })
 }

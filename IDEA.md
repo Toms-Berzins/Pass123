@@ -112,7 +112,7 @@ lib/
   - Passphrase mode in the generator ✅ Done. *(Diceware-style over the BIP39 wordlist — 11 bits/word; word-count, separator, capitalize, and add-a-digit controls; live entropy/strength. Password/Passphrase toggle on the Generate tab.)*
 
 - **v0.4 — Table stakes (catch up to the local-extension field).** Things hobby competitors already ship; their absence makes us look *behind*.
-  - **TOTP / 2FA codes** stored in entries (free — unlike Bitwarden, which gates it).
+  - **TOTP / 2FA codes** stored in entries (free — unlike Bitwarden, which gates it). ✅ Done. *(`totp.ts`: RFC 6238/4226, Web-Crypto HMAC, SHA-1/256/512, base32, `otpauth://` parse/build — verified against the official RFC 6238 vectors. Secret stored as the optional `VaultEntry.totp` field, so it rides the same AES-GCM envelope and exports with the vault. Entry form takes a base32 secret or a pasted `otpauth://` URI; entry cards show a live code + countdown driven by one shared 1s ticker, copy button, <5s warning.)*
   - **WebAuthn / biometric unlock** (Touch ID / Windows Hello / passkey authenticator) as a master-password alternative — derives a wrapping key (WebAuthn PRF → HKDF) over the **same vault key** from v0.3's wrapping refactor, so it's purely additive; vault key still memory-only.
 
 - **v0.5 — Autofill robustness (the moat).** The #1 complaint in the whole category; where execution depth beats even the incumbents.
