@@ -72,6 +72,37 @@ describe('formdetect — field detection harness (Spike 0)', () => {
   })
 })
 
+describe('real-site burn-in (Spike 4) — detection against captured markup', () => {
+  // Faithful fixtures scraped from live, server-rendered login pages. Detection-only
+  // (live fill/capture still needs the browser). When a real site mis-detects, drop
+  // its markup here as a fixture and add a row — that's the burn-in feedback loop.
+  it('github.com/login — explicit autocomplete wins over spam honeypots', () => {
+    expect(detect(loadForm('realsites/github-login'))).toEqual({ user: 'login_field', pass: 'password' })
+  })
+
+  it('gitlab.com/users/sign_in — bracketed names, remember-me checkbox ignored', () => {
+    expect(detect(loadForm('realsites/gitlab-login'))).toEqual({ user: 'user_login', pass: 'user_password' })
+  })
+
+  it('wikipedia Special:UserLogin — search-box decoy + multi-token autocomplete', () => {
+    expect(detect(loadForm('realsites/wikipedia-login'))).toEqual({ user: 'wpName1', pass: 'wpPassword1' })
+  })
+})
+
+describe('autocomplete tokenization (Spike 4 finding)', () => {
+  it('matches a multi-token autocomplete when nothing else identifies the field', () => {
+    // Only the `username` token marks the user: ids carry no hint, and a second text
+    // field sits between it and the password so the positional fallback would miss.
+    document.body.innerHTML = `
+      <form>
+        <input id="u" type="text" autocomplete="username webauthn">
+        <input id="x" type="text">
+        <input id="p" type="password" autocomplete="current-password">
+      </form>`
+    expect(detect(document)).toEqual({ user: 'u', pass: 'p' })
+  })
+})
+
 describe('labelText', () => {
   it('reads <label for>, wrapping <label>, and aria-labelledby', () => {
     document.body.innerHTML = `

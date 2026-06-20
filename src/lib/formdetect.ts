@@ -17,6 +17,15 @@ export function fieldText(el: HTMLInputElement): string {
   return `${el.name} ${el.id} ${el.getAttribute('aria-label') ?? ''} ${el.placeholder} ${el.autocomplete}`
 }
 
+/**
+ * `autocomplete` can carry several space-separated tokens (e.g. Wikipedia ships
+ * `autocomplete="username webauthn"`), so an exact `=== 'username'` test misses it.
+ * Split into tokens and match membership. Real-site finding (Spike 4 burn-in).
+ */
+export function autocompleteTokens(el: HTMLInputElement): string[] {
+  return (el.autocomplete || '').toLowerCase().split(/\s+/).filter(Boolean)
+}
+
 function escapeId(id: string): string {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(id)
   return id.replace(/["\\]/g, '\\$&')
@@ -129,24 +138,22 @@ export function passwordFields(root: ParentNode): HTMLInputElement[] {
 
 export function findPasswordField(root: ParentNode, requireValue = false): HTMLInputElement | null {
   const fields = passwordFields(root)
+  const isCurrent = (f: HTMLInputElement) => autocompleteTokens(f).includes('current-password')
   if (requireValue) {
     // The one the user actually typed into — prefer an explicit current-password.
-    return (
-      fields.find((f) => f.value && f.autocomplete === 'current-password') ??
-      fields.find((f) => f.value) ??
-      null
-    )
+    return fields.find((f) => f.value && isCurrent(f)) ?? fields.find((f) => f.value) ?? null
   }
   // For autofill, target the login (current-password) field over a new-password one.
-  return fields.find((f) => f.autocomplete === 'current-password') ?? fields[0] ?? null
+  return fields.find(isCurrent) ?? fields[0] ?? null
 }
 
 export function findUsernameField(root: ParentNode, pw: HTMLInputElement | null): HTMLInputElement | null {
   const all = inputs(root)
   // 1. Explicit signal: autocomplete or an email field.
-  const explicit = all.find(
-    (i) => i.autocomplete === 'username' || i.autocomplete === 'email' || i.type === 'email',
-  )
+  const explicit = all.find((i) => {
+    const ac = autocompleteTokens(i)
+    return ac.includes('username') || ac.includes('email') || i.type === 'email'
+  })
   if (explicit) return explicit
   // 2. Name/id/aria/placeholder/label hints, excluding search/OTP fields. The label
   //    text is what rescues framework-mangled ids where the attributes say nothing.
