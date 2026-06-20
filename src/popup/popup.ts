@@ -85,17 +85,35 @@ async function route(): Promise<void> {
   if (!exists) return renderSetup()
   if (!unlocked) return renderUnlock()
   settingsCache = await getSettings()
-  return renderMain()
+  return renderMain(await defaultTab())
+}
+
+/**
+ * Land on the tab matching the user's intent: if there are saved logins for the
+ * current site, open the Vault (with "For this site" pinned); otherwise Generate.
+ */
+async function defaultTab(): Promise<Tab> {
+  try {
+    const res = await sendMessage<VaultEntry[]>({ type: 'list' })
+    if (!res.ok || res.data.length === 0) return 'gen'
+    const host = await activeTabHostname()
+    return host && rankMatches(res.data, host).length > 0 ? 'vault' : 'gen'
+  } catch {
+    return 'gen'
+  }
 }
 
 // ---------- Setup (first run) ----------
 function renderSetup(): void {
   app.innerHTML = `
+    <p class="step">Step 1 of 2 · Create your vault</p>
     <p class="hint">Create a master password. It encrypts your vault and is never stored — if you forget it, the vault cannot be recovered.</p>
     <div>
       <label for="mp">Master password</label>
       <input id="mp" type="password" autocomplete="new-password" />
     </div>
+    <div class="meter"><span id="mp-meter"></span></div>
+    <p class="hint" id="mp-strength"></p>
     <div>
       <label for="mp2">Confirm</label>
       <input id="mp2" type="password" autocomplete="new-password" />
@@ -106,15 +124,21 @@ function renderSetup(): void {
   const mp = byId<HTMLInputElement>('mp')
   const mp2 = byId<HTMLInputElement>('mp2')
   const err = byId<HTMLParagraphElement>('err')
-  byId<HTMLButtonElement>('create').addEventListener('click', async () => {
-    if (mp.value.length < 8) return (err.textContent = 'Use at least 8 characters.')
-    if (mp.value !== mp2.value) return (err.textContent = 'Passwords do not match.')
-    const res = await sendMessage({ type: 'create', masterPassword: mp.value })
-    if (!res.ok) return (err.textContent = res.error)
-    // Straight into recovery-phrase setup — the only moment we hold the password
-    // and can wrap the vault key under a freshly minted phrase.
-    void renderRecovery(mp.value, { firstRun: true })
-  })
+  wireStrengthMeter(mp, byId<HTMLSpanElement>('mp-meter'), byId<HTMLParagraphElement>('mp-strength'))
+  addRevealToggle(mp)
+  const createBtn = byId<HTMLButtonElement>('create')
+  const submit = () =>
+    withPending(createBtn, 'Creating…', async () => {
+      if (mp.value.length < 8) return void (err.textContent = 'Use at least 8 characters.')
+      if (mp.value !== mp2.value) return void (err.textContent = 'Passwords do not match.')
+      const res = await sendMessage({ type: 'create', masterPassword: mp.value })
+      if (!res.ok) return void (err.textContent = res.error)
+      // Straight into recovery-phrase setup — the only moment we hold the password
+      // and can wrap the vault key under a freshly minted phrase.
+      void renderRecovery(mp.value, { firstRun: true })
+    })
+  createBtn.addEventListener('click', submit)
+  mp2.addEventListener('keydown', (e) => e.key === 'Enter' && submit())
   mp.focus()
 }
 
@@ -132,12 +156,15 @@ function renderUnlock(): void {
   `
   const mp = byId<HTMLInputElement>('mp')
   const err = byId<HTMLParagraphElement>('err')
-  const submit = async () => {
-    const res = await sendMessage({ type: 'unlock', masterPassword: mp.value })
-    if (!res.ok) return (err.textContent = 'Wrong master password.')
-    void route()
-  }
-  byId<HTMLButtonElement>('unlock').addEventListener('click', submit)
+  addRevealToggle(mp)
+  const unlockBtn = byId<HTMLButtonElement>('unlock')
+  const submit = () =>
+    withPending(unlockBtn, 'Unlocking…', async () => {
+      const res = await sendMessage({ type: 'unlock', masterPassword: mp.value })
+      if (!res.ok) return void (err.textContent = 'Wrong master password.')
+      void route()
+    })
+  unlockBtn.addEventListener('click', submit)
   byId<HTMLButtonElement>('useRecovery').addEventListener('click', renderRecoverWithPhrase)
   mp.addEventListener('keydown', (e) => e.key === 'Enter' && submit())
   mp.focus()
@@ -148,7 +175,10 @@ function renderUnlock(): void {
     if (!info.ok || !info.data.credentialId) return
     if (!(await isPlatformAuthenticatorAvailable())) return
     const credentialId = info.data.credentialId
+    // The awaits above can outlive this screen (e.g. unlocked before they resolved),
+    // leaving bio-slot detached — bail rather than write to a missing node.
     const slot = byId<HTMLDivElement>('bio-slot')
+    if (!slot?.isConnected) return
     slot.innerHTML = `<button id="bioUnlock" class="ghost" style="margin-top:8px">Unlock with ${escapeHtml(biometricName())}</button>`
     byId<HTMLButtonElement>('bioUnlock').addEventListener('click', async () => {
       try {
@@ -186,6 +216,7 @@ async function renderRecovery(currentSecret: string, opts: RecoveryOpts = {}): P
       .map((w, i) => `<div class="mword"><span class="n">${i + 1}</span><span class="w">${escapeHtml(w)}</span></div>`)
       .join('')
     app.innerHTML = `
+      ${opts.firstRun ? '<p class="step">Step 2 of 2 · Save your recovery phrase</p>' : ''}
       <h1 style="font-size:15px;margin:0">Your recovery phrase</h1>
       <p class="hint">These 12 words can restore your vault if you forget your master password. Write them down in order and keep them somewhere safe and offline.</p>
       <div class="mnemonic-grid">${cells}</div>
@@ -204,7 +235,7 @@ async function renderRecovery(currentSecret: string, opts: RecoveryOpts = {}): P
     byId<HTMLInputElement>('rec-saved').addEventListener('change', (e) => {
       done.disabled = !(e.target as HTMLInputElement).checked
     })
-    byId<HTMLButtonElement>('rec-copy').addEventListener('click', () => copySecret(phrase))
+    byId<HTMLButtonElement>('rec-copy').addEventListener('click', () => copySecret(phrase, 'Recovery phrase copied'))
     byId<HTMLButtonElement>('rec-print').addEventListener('click', () => openEmergencyKit(phrase, 'print'))
     byId<HTMLButtonElement>('rec-download').addEventListener('click', () => openEmergencyKit(phrase, 'download'))
     byId<HTMLButtonElement>('rec-regen').addEventListener('click', async () => {
@@ -251,6 +282,8 @@ function renderSetNewMaster(currentSecret: string): void {
   app.innerHTML = `
     <p class="hint">Choose a new master password. It replaces the old one; your recovery phrase still works.</p>
     <div><label for="np">New master password</label><input id="np" type="password" autocomplete="new-password" /></div>
+    <div class="meter"><span id="np-meter"></span></div>
+    <p class="hint" id="np-strength"></p>
     <div><label for="np2">Confirm</label><input id="np2" type="password" autocomplete="new-password" /></div>
     <p id="err" class="error"></p>
     <button id="setpw">Set master password</button>
@@ -258,13 +291,19 @@ function renderSetNewMaster(currentSecret: string): void {
   const np = byId<HTMLInputElement>('np')
   const np2 = byId<HTMLInputElement>('np2')
   const err = byId<HTMLParagraphElement>('err')
-  byId<HTMLButtonElement>('setpw').addEventListener('click', async () => {
-    if (np.value.length < 8) return (err.textContent = 'Use at least 8 characters.')
-    if (np.value !== np2.value) return (err.textContent = 'Passwords do not match.')
-    const res = await sendMessage({ type: 'changeMaster', currentSecret, newMasterPassword: np.value })
-    if (!res.ok) return (err.textContent = res.error)
-    void route()
-  })
+  wireStrengthMeter(np, byId<HTMLSpanElement>('np-meter'), byId<HTMLParagraphElement>('np-strength'))
+  addRevealToggle(np)
+  const setBtn = byId<HTMLButtonElement>('setpw')
+  const submit = () =>
+    withPending(setBtn, 'Saving…', async () => {
+      if (np.value.length < 8) return void (err.textContent = 'Use at least 8 characters.')
+      if (np.value !== np2.value) return void (err.textContent = 'Passwords do not match.')
+      const res = await sendMessage({ type: 'changeMaster', currentSecret, newMasterPassword: np.value })
+      if (!res.ok) return void (err.textContent = res.error)
+      void route()
+    })
+  setBtn.addEventListener('click', submit)
+  np2.addEventListener('keydown', (e) => e.key === 'Enter' && submit())
   np.focus()
 }
 
@@ -409,7 +448,7 @@ function renderGenerator(): void {
   byId<HTMLButtonElement>('mode-password').addEventListener('click', () => setMode('password'))
   byId<HTMLButtonElement>('mode-passphrase').addEventListener('click', () => setMode('passphrase'))
   byId<HTMLButtonElement>('regen').addEventListener('click', refresh)
-  byId<HTMLButtonElement>('copy').addEventListener('click', () => copySecret(lastGenerated))
+  byId<HTMLButtonElement>('copy').addEventListener('click', () => copySecret(lastGenerated, 'Password copied'))
   byId<HTMLButtonElement>('saveGen').addEventListener('click', () => renderEntryForm(undefined, lastGenerated))
 
   drawControls()
@@ -424,14 +463,20 @@ async function renderVault(): Promise<void> {
 
   view.innerHTML = `
     <div class="spread">
-      <input id="search" type="text" placeholder="Search…" style="flex:1" />
+      <div class="search-wrap">
+        <input id="search" type="text" placeholder="Search…" />
+        <button id="searchClear" class="search-clear" aria-label="Clear search" hidden>✕</button>
+      </div>
       <button id="addBtn" class="small" style="margin-left:8px">+ Add</button>
     </div>
+    <p id="count" class="result-count"></p>
     <div id="forSite"></div>
     <div class="list" id="list"></div>
   `
   byId<HTMLButtonElement>('addBtn').addEventListener('click', () => renderEntryForm())
   const search = byId<HTMLInputElement>('search')
+  const clearBtn = byId<HTMLButtonElement>('searchClear')
+  const count = byId<HTMLParagraphElement>('count')
   const list = byId<HTMLDivElement>('list')
   const forSite = byId<HTMLDivElement>('forSite')
 
@@ -440,6 +485,7 @@ async function renderVault(): Promise<void> {
   const siteMatches = host ? rankMatches(entries, host) : []
 
   const draw = (q: string) => {
+    clearBtn.hidden = !q
     // The "for this site" section is a no-query convenience; hide it while searching.
     if (!q && siteMatches.length > 0) {
       forSite.innerHTML = `<p class="section-label">For this site${host ? ` · ${escapeHtml(host)}` : ''}</p>`
@@ -454,14 +500,29 @@ async function renderVault(): Promise<void> {
         e.url.toLowerCase().includes(q) ||
         e.username.toLowerCase().includes(q),
     )
+    count.textContent = q ? `${filtered.length} ${filtered.length === 1 ? 'match' : 'matches'}` : ''
     if (filtered.length === 0) {
-      list.innerHTML = `<p class="empty">${entries.length ? 'No matches.' : 'No saved passwords yet.'}</p>`
+      if (entries.length === 0) {
+        list.innerHTML = `<div class="empty"><p style="margin:0 0 10px">No saved passwords yet.</p></div>`
+        const cta = document.createElement('button')
+        cta.className = 'small'
+        cta.textContent = '+ Add your first password'
+        cta.addEventListener('click', () => renderEntryForm())
+        list.querySelector('.empty')!.appendChild(cta)
+      } else {
+        list.innerHTML = `<p class="empty">No matches.</p>`
+      }
       return
     }
     list.innerHTML = q || siteMatches.length === 0 ? '' : `<p class="section-label">All passwords</p>`
     for (const e of filtered) list.appendChild(entryCard(e))
   }
   search.addEventListener('input', () => draw(search.value.toLowerCase().trim()))
+  clearBtn.addEventListener('click', () => {
+    search.value = ''
+    draw('')
+    search.focus()
+  })
   draw('')
 }
 
@@ -495,13 +556,34 @@ function entryCard(e: VaultEntry): HTMLElement {
     </div>
   `
   if (e.totp) mountTotpRow(el, e.totp)
-  el.querySelector('[data-act="copyUser"]')!.addEventListener('click', () => copySecret(e.username))
-  el.querySelector('[data-act="copyPass"]')!.addEventListener('click', () => copySecret(e.password))
+  el.querySelector('[data-act="copyUser"]')!.addEventListener('click', () => copySecret(e.username, 'Username copied'))
+  el.querySelector('[data-act="copyPass"]')!.addEventListener('click', () => copySecret(e.password, 'Password copied'))
   el.querySelector('[data-act="fill"]')!.addEventListener('click', () => autofill(e))
   el.querySelector('[data-act="edit"]')!.addEventListener('click', () => renderEntryForm(e))
   el.querySelector('[data-act="del"]')!.addEventListener('click', async () => {
     await sendMessage({ type: 'delete', id: e.id })
     void renderVault()
+    toast(`Deleted ${e.title || e.url || 'entry'}`, {
+      danger: true,
+      icon: '✕',
+      action: {
+        label: 'Undo',
+        onClick: async () => {
+          await sendMessage({
+            type: 'add',
+            entry: {
+              title: e.title,
+              url: e.url,
+              username: e.username,
+              password: e.password,
+              notes: e.notes,
+              totp: e.totp,
+            },
+          })
+          void renderVault()
+        },
+      },
+    })
   })
   return el
 }
@@ -533,7 +615,7 @@ function mountTotpRow(card: HTMLElement, secret: string): void {
       leftEl.classList.toggle('expiring', remaining <= 5)
     },
   })
-  card.querySelector('[data-act="copyTotp"]')!.addEventListener('click', () => copySecret(current))
+  card.querySelector('[data-act="copyTotp"]')!.addEventListener('click', () => copySecret(current, 'Code copied'))
 }
 
 function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
@@ -543,11 +625,11 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
     <div><label>Title</label><input id="f-title" type="text" value="${attr(e?.title)}" /></div>
     <div><label>URL</label><input id="f-url" type="text" placeholder="example.com" value="${attr(e?.url)}" /></div>
     <div><label>Username</label><input id="f-user" type="text" value="${attr(e?.username)}" /></div>
-    <div><label>Password</label>
+    <div id="f-pass-block"><label>Password</label>
       <div class="row" id="f-pass-row">
         <input id="f-pass" type="${e?.password ? 'password' : 'text'}" value="${attr(e?.password ?? presetPassword)}" />
-        <button id="f-reveal" class="ghost small" style="flex:0 0 auto" title="Reveal password" aria-label="Reveal password">${e?.password ? '👁' : '🙈'}</button>
-        <button id="f-gen" class="ghost small" style="flex:0 0 auto" title="Generate">⟳</button>
+        <button id="f-reveal" class="icon-btn" title="Reveal password" aria-label="Reveal password">${e?.password ? ICON.eye : ICON.eyeOff}</button>
+        <button id="f-gen" class="icon-btn" title="Generate password" aria-label="Generate password">${ICON.refresh}</button>
       </div>
     </div>
     <div><label>2FA secret or otpauth:// URI <span class="hint">(optional)</span></label>
@@ -567,12 +649,12 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
   let needsVerify = Boolean(e?.password)
   const setRevealed = (on: boolean): void => {
     passEl.type = on ? 'text' : 'password'
-    revealBtn.textContent = on ? '🙈' : '👁'
+    revealBtn.innerHTML = on ? ICON.eyeOff : ICON.eye
     revealBtn.title = revealBtn.ariaLabel = on ? 'Hide password' : 'Reveal password'
   }
   revealBtn.addEventListener('click', async () => {
     if (passEl.type === 'text') return setRevealed(false) // hide freely
-    if (needsVerify && !(await promptMasterVerify(byId<HTMLDivElement>('f-pass-row')))) return
+    if (needsVerify && !(await promptMasterVerify(byId<HTMLDivElement>('f-pass-block')))) return
     setRevealed(true)
   })
   byId<HTMLButtonElement>('f-gen').addEventListener('click', () => {
@@ -581,6 +663,9 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
     setRevealed(true)
   })
   byId<HTMLButtonElement>('cancel').addEventListener('click', () => renderMain('vault'))
+  view.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') renderMain('vault')
+  })
   byId<HTMLButtonElement>('save').addEventListener('click', async () => {
     const err = byId<HTMLParagraphElement>('err')
     let totp: string | undefined
@@ -678,8 +763,10 @@ function renderSettings(): void {
   // password re-entered (the background never keeps it around).
   void (async () => {
     const res = await sendMessage<{ hasRecovery: boolean }>({ type: 'hasRecovery' })
+    const recState = byId<HTMLParagraphElement>('rec-state')
+    if (!recState?.isConnected) return // tab switched away during the await
     const has = res.ok && res.data.hasRecovery
-    byId<HTMLParagraphElement>('rec-state').textContent = has
+    recState.textContent = has
       ? 'A recovery phrase is set. Regenerating replaces it — the old one stops working.'
       : 'No recovery phrase yet. Set one up so you can restore the vault if you forget your master password.'
     const action = byId<HTMLDivElement>('rec-action')
@@ -730,15 +817,20 @@ function renderExport(): void {
   const ep = byId<HTMLInputElement>('ep')
   const ep2 = byId<HTMLInputElement>('ep2')
   const err = byId<HTMLParagraphElement>('err')
+  addRevealToggle(ep)
   byId<HTMLButtonElement>('cancel').addEventListener('click', backToSettings)
-  byId<HTMLButtonElement>('do-export').addEventListener('click', async () => {
-    if (ep.value.length < 8) return (err.textContent = 'Use at least 8 characters.')
-    if (ep.value !== ep2.value) return (err.textContent = 'Passwords do not match.')
-    const res = await sendMessage<{ json: string }>({ type: 'exportVault', exportPassword: ep.value })
-    if (!res.ok) return (err.textContent = res.error)
-    downloadBlob(res.data.json, `pass123-backup-${new Date().toISOString().slice(0, 10)}.json`, 'application/json')
-    backToSettings()
-  })
+  const exportBtn = byId<HTMLButtonElement>('do-export')
+  const submit = () =>
+    withPending(exportBtn, 'Exporting…', async () => {
+      if (ep.value.length < 8) return void (err.textContent = 'Use at least 8 characters.')
+      if (ep.value !== ep2.value) return void (err.textContent = 'Passwords do not match.')
+      const res = await sendMessage<{ json: string }>({ type: 'exportVault', exportPassword: ep.value })
+      if (!res.ok) return void (err.textContent = res.error)
+      downloadBlob(res.data.json, `pass123-backup-${new Date().toISOString().slice(0, 10)}.json`, 'application/json')
+      backToSettings()
+    })
+  exportBtn.addEventListener('click', submit)
+  ep2.addEventListener('keydown', (e) => e.key === 'Enter' && submit())
   ep.focus()
 }
 
@@ -758,18 +850,23 @@ function renderImport(): void {
   const file = byId<HTMLInputElement>('file')
   const ip = byId<HTMLInputElement>('ip')
   const err = byId<HTMLParagraphElement>('err')
+  addRevealToggle(ip)
   byId<HTMLButtonElement>('cancel').addEventListener('click', backToSettings)
-  byId<HTMLButtonElement>('do-import').addEventListener('click', async () => {
-    const f = file.files?.[0]
-    if (!f) return (err.textContent = 'Choose a backup file.')
-    if (!ip.value) return (err.textContent = 'Enter the export password.')
-    const json = await f.text()
-    const res = await sendMessage<{ added: number }>({ type: 'importVault', json, exportPassword: ip.value })
-    if (!res.ok) return (err.textContent = res.error)
-    err.className = 'hint'
-    err.textContent = `Imported ${res.data.added} ${res.data.added === 1 ? 'entry' : 'entries'}.`
-    setTimeout(backToSettings, 1200)
-  })
+  const importBtn = byId<HTMLButtonElement>('do-import')
+  const submit = () =>
+    withPending(importBtn, 'Importing…', async () => {
+      const f = file.files?.[0]
+      if (!f) return void (err.textContent = 'Choose a backup file.')
+      if (!ip.value) return void (err.textContent = 'Enter the export password.')
+      const json = await f.text()
+      const res = await sendMessage<{ added: number }>({ type: 'importVault', json, exportPassword: ip.value })
+      if (!res.ok) return void (err.textContent = res.error)
+      err.className = 'hint'
+      err.textContent = `Imported ${res.data.added} ${res.data.added === 1 ? 'entry' : 'entries'}.`
+      setTimeout(backToSettings, 1200)
+    })
+  importBtn.addEventListener('click', submit)
+  ip.addEventListener('keydown', (e) => e.key === 'Enter' && submit())
   file.focus()
 }
 
@@ -829,6 +926,7 @@ function renderEnableBiometric(): void {
   `
   const bmp = byId<HTMLInputElement>('bmp')
   const err = byId<HTMLParagraphElement>('err')
+  addRevealToggle(bmp)
   byId<HTMLButtonElement>('cancel').addEventListener('click', () => renderMain('settings'))
   const go = async () => {
     const check = await sendMessage({ type: 'unlock', masterPassword: bmp.value })
@@ -866,6 +964,7 @@ function promptForRecovery(): void {
   `
   const cmp = byId<HTMLInputElement>('cmp')
   const err = byId<HTMLParagraphElement>('err')
+  addRevealToggle(cmp)
   byId<HTMLButtonElement>('cancel').addEventListener('click', () => renderMain('settings'))
   const go = async () => {
     // Verify the password resolves a wrap before showing the phrase screen.
@@ -939,7 +1038,7 @@ function downloadBlob(content: string, filename: string, type: string): void {
 
 async function autofill(e: VaultEntry): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-  if (!tab?.id) return
+  if (!tab?.id) return void toast('No active page to fill.', { danger: true, icon: '!' })
   try {
     await chrome.tabs.sendMessage(tab.id, {
       type: 'fillCredentials',
@@ -948,7 +1047,9 @@ async function autofill(e: VaultEntry): Promise<void> {
     })
     window.close()
   } catch {
-    /* content script not present on this page (e.g. chrome:// pages) */
+    // Content script absent (chrome:// page, or no login form here) — say so
+    // instead of doing nothing, which reads as a broken button.
+    toast("Can't autofill on this page.", { danger: true, icon: '!' })
   }
 }
 
@@ -961,44 +1062,143 @@ async function autofill(e: VaultEntry): Promise<void> {
  */
 function promptMasterVerify(host: HTMLElement): Promise<boolean> {
   return new Promise((resolve) => {
-    host.querySelector('.verify-row')?.remove()
-    const row = document.createElement('div')
-    row.className = 'row verify-row'
-    row.style.marginTop = '6px'
-    row.innerHTML = `
-      <input type="password" class="verify-mp" placeholder="Master password to reveal" autocomplete="current-password" style="flex:1" />
-      <button class="small verify-ok" style="flex:0 0 auto">Reveal</button>
-      <button class="ghost small verify-cancel" style="flex:0 0 auto">Cancel</button>`
-    const input = row.querySelector<HTMLInputElement>('.verify-mp')!
+    host.querySelector('.verify-box')?.remove()
+    const box = document.createElement('div')
+    box.className = 'verify-box'
+    box.innerHTML = `
+      <p class="hint" style="margin:8px 0 4px">Enter your master password to reveal this password.</p>
+      <input type="password" class="verify-mp" placeholder="Master password" autocomplete="current-password" />
+      <p class="error verify-err" style="margin:4px 0 0"></p>
+      <div class="row" style="margin-top:6px">
+        <button class="verify-ok">Reveal</button>
+        <button class="ghost verify-cancel">Cancel</button>
+      </div>`
+    const input = box.querySelector<HTMLInputElement>('.verify-mp')!
+    const err = box.querySelector<HTMLParagraphElement>('.verify-err')!
+    const okBtn = box.querySelector<HTMLButtonElement>('.verify-ok')!
     const done = (result: boolean): void => {
-      row.remove()
+      box.remove()
       resolve(result)
     }
-    row.querySelector<HTMLButtonElement>('.verify-ok')!.addEventListener('click', async () => {
-      const res = await sendMessage<{ valid: boolean }>({ type: 'verifyMaster', masterPassword: input.value })
-      if (res.ok && res.data.valid) return done(true)
-      input.value = ''
-      input.placeholder = 'Wrong password — try again'
-      input.focus()
-    })
-    row.querySelector<HTMLButtonElement>('.verify-cancel')!.addEventListener('click', () => done(false))
+    let busy = false
+    const attempt = async (): Promise<void> => {
+      if (busy) return
+      err.textContent = ''
+      if (!input.value) {
+        err.textContent = 'Enter your master password.'
+        return input.focus()
+      }
+      busy = true
+      okBtn.disabled = true
+      const label = okBtn.textContent
+      okBtn.textContent = 'Checking…'
+      try {
+        const res = await sendMessage<{ valid: boolean }>({ type: 'verifyMaster', masterPassword: input.value })
+        if (!res.ok) {
+          // A real failure (e.g. the vault auto-locked) — surface it, don't call it a wrong password.
+          err.textContent = res.error || 'Could not verify right now.'
+          return
+        }
+        if (res.data.valid) return done(true)
+        err.textContent = 'Wrong master password.'
+        input.value = ''
+        input.focus()
+      } finally {
+        busy = false
+        okBtn.disabled = false
+        okBtn.textContent = label
+      }
+    }
+    okBtn.addEventListener('click', () => void attempt())
+    box.querySelector<HTMLButtonElement>('.verify-cancel')!.addEventListener('click', () => done(false))
+    input.addEventListener('input', () => (err.textContent = ''))
     input.addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter') row.querySelector<HTMLButtonElement>('.verify-ok')!.click()
+      if (ev.key === 'Enter') void attempt()
       if (ev.key === 'Escape') done(false)
     })
-    host.appendChild(row)
+    host.appendChild(box) // full-width block under the password row, not inside it
     input.focus()
   })
 }
 
-async function copySecret(value: string): Promise<void> {
+async function copySecret(value: string, label = 'Copied'): Promise<void> {
   if (!value) return
   await navigator.clipboard.writeText(value)
   // Best-effort clipboard auto-clear after the configured delay (0 = never).
   const secs = settingsCache.clipboardClearSeconds
   if (secs > 0) {
-    setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), secs * 1000)
+    setTimeout(() => {
+      navigator.clipboard
+        .writeText('')
+        .then(() => {
+          // Confirm the security action — but only if the popup is still open to see it.
+          if (document.visibilityState === 'visible') toast('Clipboard cleared')
+        })
+        .catch(() => {})
+    }, secs * 1000)
+    toast(`${label} · clears in ${secs}s`)
+  } else {
+    toast(label)
   }
+}
+
+interface ToastOpts {
+  icon?: string
+  danger?: boolean
+  action?: { label: string; onClick: () => void }
+  durationMs?: number
+}
+
+let toastHost: HTMLElement | null = null
+
+/** Transient status message at the popup bottom. With an action it lingers longer. */
+function toast(msg: string, opts: ToastOpts = {}): void {
+  if (!toastHost) {
+    toastHost = document.createElement('div')
+    toastHost.className = 'toast-host'
+    document.body.appendChild(toastHost)
+  }
+  const el = document.createElement('div')
+  el.className = `toast${opts.danger ? ' danger' : ''}`
+  el.innerHTML = `<span class="toast-ico">${opts.icon ?? '✓'}</span><span class="toast-msg"></span>`
+  el.querySelector('.toast-msg')!.textContent = msg
+  const dismiss = (): void => el.remove()
+  if (opts.action) {
+    const b = document.createElement('button')
+    b.className = 'toast-action'
+    b.textContent = opts.action.label
+    b.addEventListener('click', () => {
+      opts.action!.onClick()
+      dismiss()
+    })
+    el.appendChild(b)
+  }
+  toastHost.appendChild(el)
+  setTimeout(dismiss, opts.durationMs ?? (opts.action ? 5000 : 2200))
+}
+
+/** Rough entropy estimate for a typed password, mirroring the generator's pool model. */
+function estimateEntropy(pw: string): number {
+  if (!pw) return 0
+  let pool = 0
+  if (/[a-z]/.test(pw)) pool += 26
+  if (/[A-Z]/.test(pw)) pool += 26
+  if (/[0-9]/.test(pw)) pool += 10
+  if (/[^a-zA-Z0-9]/.test(pw)) pool += 32
+  return Math.round(pw.length * Math.log2(pool || 1))
+}
+
+/** Wire a master-password input to a live strength meter + label (setup / new master). */
+function wireStrengthMeter(input: HTMLInputElement, meter: HTMLElement, label: HTMLElement): void {
+  const update = (): void => {
+    const bits = estimateEntropy(input.value)
+    const s = strengthFromEntropy(bits)
+    meter.className = `s-${s}`
+    meter.style.width = `${Math.min(100, (bits / 128) * 100)}%`
+    label.textContent = input.value ? `~${bits} bits · ${s}` : ''
+  }
+  input.addEventListener('input', update)
+  update()
 }
 
 function checkbox(key: keyof GeneratorOptions, label: string): string {
@@ -1022,6 +1222,53 @@ function escapeHtml(s: string): string {
 }
 function attr(s: string | undefined): string {
   return escapeHtml(s ?? '').replace(/"/g, '&quot;')
+}
+
+/** Inline-SVG icon set (replaces emoji glyphs that render inconsistently across OSes). */
+const ICON = {
+  eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
+  eyeOff:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 10.6a3 3 0 0 0 4.2 4.2"/><path d="M9.9 4.6A11 11 0 0 1 12 4.5c6.4 0 10 7 10 7a18 18 0 0 1-3.2 4.1M6.1 6.1A18 18 0 0 0 2 11.5s3.6 7 10 7a11 11 0 0 0 3.1-.4"/></svg>',
+  refresh:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>',
+}
+
+/** Wrap a password input with an inline reveal/hide eye toggle. */
+function addRevealToggle(input: HTMLInputElement): void {
+  const wrap = document.createElement('div')
+  wrap.className = 'pw-wrap'
+  input.parentNode!.insertBefore(wrap, input)
+  wrap.appendChild(input)
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'pw-eye'
+  btn.innerHTML = ICON.eye
+  btn.setAttribute('aria-label', 'Reveal password')
+  btn.addEventListener('click', () => {
+    const reveal = input.type === 'password'
+    input.type = reveal ? 'text' : 'password'
+    btn.innerHTML = reveal ? ICON.eyeOff : ICON.eye
+    btn.setAttribute('aria-label', reveal ? 'Hide password' : 'Reveal password')
+    input.focus()
+  })
+  wrap.appendChild(btn)
+}
+
+/** Disable a button and show a pending label while `fn` runs; restore on completion. */
+async function withPending<T>(
+  btn: HTMLButtonElement,
+  pendingLabel: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const original = btn.textContent
+  btn.disabled = true
+  btn.textContent = pendingLabel
+  try {
+    return await fn()
+  } finally {
+    btn.disabled = false
+    btn.textContent = original
+  }
 }
 
 void route()
