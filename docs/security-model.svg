@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="366" viewBox="0 0 1000 366" font-family="ui-sans-serif,Segoe UI,system-ui,Arial">
+<defs><linearGradient id="acc" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#6c8cff"/><stop offset="1" stop-color="#5a78e6"/></linearGradient><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7e8aa6"/></marker></defs>
+<rect width="1000" height="366" rx="18" fill="#0e1016"/>
+<rect x="0.5" y="0.5" width="999" height="365" rx="18" fill="none" stroke="#283044" stroke-width="1"/>
+<text x="32" y="50" fill="#eef1f8" font-size="25" font-weight="700">How your vault is protected</text>
+<text x="32" y="78" fill="#aeb6cc" font-size="13.5">Local-only · AES-256-GCM · the encryption key never touches disk</text>
+<rect x="32" y="92" width="84" height="3" rx="1.5" fill="url(#acc)"/>
+<rect x="24" y="122" width="220" height="204" rx="13" fill="#161a24" stroke="#283044" stroke-width="1.4"/>
+<rect x="24" y="122" width="220" height="3.5" rx="1.75" fill="url(#acc)"/>
+<g transform="translate(42,144)" fill="none" stroke="#8fa6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M12 12 L21 21 M18 18 L21 15 M15 15 L18 12"/></g>
+<text x="78" y="164" fill="#eef1f8" font-size="16.5" font-weight="700">Unlock</text>
+<line x1="42" y1="184" x2="226" y2="184" stroke="#283044" stroke-width="1"/>
+<text x="42" y="208" fill="#aeb6cc" font-size="11.7">Your master password and a</text>
+<text x="42" y="227" fill="#aeb6cc" font-size="11.7">random salt derive a key</text>
+<text x="42" y="246" fill="#aeb6cc" font-size="11.7">(PBKDF2, 310k iterations).</text>
+<text x="42" y="265" fill="#aeb6cc" font-size="11.7">The password is never stored.</text>
+<text x="228" y="312" text-anchor="end" fill="#7e8aa6" font-size="11" font-weight="700">1</text>
+<line x1="247" y1="224.0" x2="265" y2="224.0" stroke="#7e8aa6" stroke-width="2" marker-end="url(#arr)"/>
+<rect x="268" y="122" width="220" height="204" rx="13" fill="#161a24" stroke="#283044" stroke-width="1.4"/>
+<rect x="268" y="122" width="220" height="3.5" rx="1.75" fill="url(#acc)"/>
+<g transform="translate(286,144)" fill="none" stroke="#8fa6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 1 L23 5 V12 C23 18 18.5 22.5 13 25 C7.5 22.5 3 18 3 12 V5 Z"/><path d="M8.5 13 L12 16.5 L18 9"/></g>
+<text x="322" y="164" fill="#eef1f8" font-size="16.5" font-weight="700">Decrypt = proof</text>
+<line x1="286" y1="184" x2="470" y2="184" stroke="#283044" stroke-width="1"/>
+<text x="286" y="208" fill="#aeb6cc" font-size="11.7">The key decrypts your vault</text>
+<text x="286" y="227" fill="#aeb6cc" font-size="11.7">with AES-256-GCM. A wrong</text>
+<text x="286" y="246" fill="#aeb6cc" font-size="11.7">password simply can't decrypt</text>
+<text x="286" y="265" fill="#aeb6cc" font-size="11.7">— nothing stored to attack.</text>
+<text x="472" y="312" text-anchor="end" fill="#7e8aa6" font-size="11" font-weight="700">2</text>
+<line x1="491" y1="224.0" x2="509" y2="224.0" stroke="#7e8aa6" stroke-width="2" marker-end="url(#arr)"/>
+<rect x="512" y="122" width="220" height="204" rx="13" fill="#161a24" stroke="#283044" stroke-width="1.4"/>
+<rect x="512" y="122" width="220" height="3.5" rx="1.75" fill="url(#acc)"/>
+<g transform="translate(530,144)" fill="none" stroke="#8fa6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="16" height="16" rx="2.5"/><rect x="9.5" y="9.5" width="7" height="7" rx="1"/><path d="M9 5 V1 M13 5 V1 M17 5 V1 M9 21 V25 M13 21 V25 M17 21 V25 M5 9 H1 M5 13 H1 M5 17 H1 M21 9 H25 M21 13 H25 M21 17 H25"/></g>
+<text x="566" y="164" fill="#eef1f8" font-size="16.5" font-weight="700">Memory only</text>
+<line x1="530" y1="184" x2="714" y2="184" stroke="#283044" stroke-width="1"/>
+<text x="530" y="208" fill="#aeb6cc" font-size="11.7">The key lives only in the</text>
+<text x="530" y="227" fill="#aeb6cc" font-size="11.7">extension's background RAM.</text>
+<text x="530" y="246" fill="#aeb6cc" font-size="11.7">On disk: nothing but cipher-</text>
+<text x="530" y="265" fill="#aeb6cc" font-size="11.7">text — never the key itself.</text>
+<text x="716" y="312" text-anchor="end" fill="#7e8aa6" font-size="11" font-weight="700">3</text>
+<line x1="735" y1="224.0" x2="753" y2="224.0" stroke="#7e8aa6" stroke-width="2" marker-end="url(#arr)"/>
+<rect x="756" y="122" width="220" height="204" rx="13" fill="#161a24" stroke="#283044" stroke-width="1.4"/>
+<rect x="756" y="122" width="220" height="3.5" rx="1.75" fill="url(#acc)"/>
+<g transform="translate(774,144)" fill="none" stroke="#8fa6ff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="13" cy="13" r="11"/><path d="M13 6.5 V13 L17.5 16"/></g>
+<text x="810" y="164" fill="#eef1f8" font-size="16.5" font-weight="700">Auto-lock</text>
+<line x1="774" y1="184" x2="958" y2="184" stroke="#283044" stroke-width="1"/>
+<text x="774" y="208" fill="#aeb6cc" font-size="11.7">After 5 minutes idle — or if</text>
+<text x="774" y="227" fill="#aeb6cc" font-size="11.7">the browser suspends the</text>
+<text x="774" y="246" fill="#aeb6cc" font-size="11.7">extension — the key vanishes</text>
+<text x="774" y="265" fill="#aeb6cc" font-size="11.7">and the vault re-locks.</text>
+<text x="960" y="312" text-anchor="end" fill="#7e8aa6" font-size="11" font-weight="700">4</text>
+<text x="32" y="350" fill="#7e8aa6" font-size="11">Threat model: protects stored data from casual local access. It does not defend against a compromised OS, malware, or a keylogger.</text>
+</svg>

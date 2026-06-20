@@ -1,4 +1,27 @@
+# Dependencies
+node_modules/
 
+# Build output
+dist/
+*.zip
 
-#Ignore vscode AI rules
-.github\instructions\codacy.instructions.md
+# Vite / TS caches
+.vite/
+*.tsbuildinfo
+
+# Graphify knowledge graph (generated; rebuild with /graphify)
+graphify-out/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Ignore vscode AI rules
+.github/instructions/codacy.instructions.md
