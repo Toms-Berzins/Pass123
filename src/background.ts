@@ -74,6 +74,12 @@ interface PendingCapture {
 // landing on www.example.com resolve to the same pending entry.
 const pending = new Map<string, PendingCapture>()
 
+// Username typed on an earlier full-navigation step of a multi-step login, kept so
+// the password-only page that follows can be captured against the right account.
+// Keyed by registrable domain, TTL'd, never persisted, cleared on lock. A username
+// is not a secret like the password, but we still hold it only while unlocked.
+const rememberedUsernames = new Map<string, { username: string; ts: number }>()
+
 /** Registrable-domain key for the pending map, with a hostname fallback. */
 function pendingKey(hostname: string): string {
   return registrableDomain(hostname) || hostname
@@ -82,6 +88,7 @@ function pendingKey(hostname: string): string {
 function lock(): void {
   sessionKey = null
   pending.clear() // captured plaintext must not outlive the unlocked session
+  rememberedUsernames.clear()
   chrome.alarms.clear(AUTO_LOCK_ALARM)
 }
 
@@ -207,12 +214,25 @@ async function handle(req: Request, tabId?: number): Promise<unknown> {
       armAutoLock()
       return matchEntries(data, req.hostname)
     }
+    case 'rememberUsername': {
+      // Only hold this while unlocked (capture needs an unlocked vault anyway).
+      if (!sessionKey || !req.username) return { ok: false }
+      rememberedUsernames.set(pendingKey(req.hostname), { username: req.username, ts: Date.now() })
+      return { ok: true }
+    }
     case 'capturePending': {
       // Silently ignore when capture is disabled, or when locked — we can't
       // decrypt to compare, and we won't hold captured plaintext while locked.
       if (!settings.captureEnabled || !sessionKey) return { stored: false }
+      // Cross-document multi-step: if this page had no username field, pair the one
+      // remembered from the earlier step (same registrable domain, within TTL).
+      let username = req.username
+      if (!username) {
+        const remembered = rememberedUsernames.get(pendingKey(req.hostname))
+        if (remembered && Date.now() - remembered.ts <= PENDING_TTL_MS) username = remembered.username
+      }
       const data = await loadData(sessionKey)
-      const decision = captureDecision(data, req.hostname, req.username, req.password)
+      const decision = captureDecision(data, req.hostname, username, req.password)
       const key = pendingKey(req.hostname)
       if (decision.kind === 'none') {
         pending.delete(key)
@@ -220,7 +240,7 @@ async function handle(req: Request, tabId?: number): Promise<unknown> {
       }
       pending.set(key, {
         hostname: req.hostname,
-        username: req.username,
+        username,
         password: req.password,
         action: decision.kind,
         id: decision.kind === 'update' ? decision.id : undefined,

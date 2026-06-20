@@ -1,0 +1,12 @@
+<!-- Framework-mangled ids/names carry no signal, and the username field is NOT the
+     one immediately before the password (a "Company code" field sits between them).
+     Only the <label for> text ("Work email") identifies the real username, so the
+     positional fallback would pick the WRONG field — this proves label heuristics. -->
+<form>
+  <label for="f_a1">Work email</label>
+  <input type="text" id="f_a1" name="f_a1">
+  <label for="f_b2">Company code</label>
+  <input type="text" id="f_b2" name="f_b2">
+  <label for="f_c3">Password</label>
+  <input type="password" id="f_c3" name="f_c3">
+</form>

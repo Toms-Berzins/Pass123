@@ -25,6 +25,10 @@ export type Request =
   | { type: 'update'; entry: VaultEntry }
   | { type: 'delete'; id: string }
   | { type: 'matchForHost'; hostname: string }
+  // Cross-document multi-step login: the username typed on one full-navigation page
+  // is remembered in the worker (keyed by registrable domain, TTL'd) so the
+  // password-only page that follows can be captured with the right account.
+  | { type: 'rememberUsername'; hostname: string; username: string }
   // Capture-on-submit: content script offers to save/update after a login.
   | { type: 'capturePending'; hostname: string; username: string; password: string }
   | { type: 'pendingFor'; hostname: string }

@@ -12,68 +12,14 @@
  */
 
 import { sendMessage, type PendingInfo } from './lib/messages'
+import { findPasswordField, findUsernameField, passwordFields } from './lib/formdetect'
 
-// ---------- field detection ----------
-/** Skip fields the user can't actually be logging in with (hidden, disabled, off-screen). */
-function isVisible(el: HTMLInputElement): boolean {
-  if (el.hidden || el.disabled || el.type === 'hidden') return false
-  return el.offsetParent !== null || el.getClientRects().length > 0
-}
+// With `all_frames`, this script runs in every frame. Fill + capture work per-frame
+// (so iframe'd login forms are handled), but the save/update banner renders only in
+// the top frame — never inside an embedded ad/widget iframe.
+const isTopFrame = window === window.top
 
-const USER_HINT = /user|email|login|account|phone|mobile|nick/i
-const NON_USER_HINT = /search|query|otp|code|totp|2fa|captcha/i
-
-/** All the identifying text on a field, lower-cased, for heuristic matching. */
-function fieldText(el: HTMLInputElement): string {
-  return `${el.name} ${el.id} ${el.getAttribute('aria-label') ?? ''} ${el.placeholder} ${el.autocomplete}`
-}
-
-function passwordFields(): HTMLInputElement[] {
-  return [...document.querySelectorAll<HTMLInputElement>('input[type="password"]')].filter(isVisible)
-}
-
-function findPasswordField(requireValue = false): HTMLInputElement | null {
-  const fields = passwordFields()
-  if (requireValue) {
-    // The one the user actually typed into — prefer an explicit current-password.
-    return (
-      fields.find((f) => f.value && f.autocomplete === 'current-password') ??
-      fields.find((f) => f.value) ??
-      null
-    )
-  }
-  // For autofill, target the login (current-password) field over a new-password one.
-  return fields.find((f) => f.autocomplete === 'current-password') ?? fields[0] ?? null
-}
-
-function findUsernameField(pw: HTMLInputElement | null): HTMLInputElement | null {
-  const all = [...document.querySelectorAll<HTMLInputElement>('input')].filter(isVisible)
-  // 1. Explicit signal: autocomplete or an email field.
-  const explicit = all.find(
-    (i) => i.autocomplete === 'username' || i.autocomplete === 'email' || i.type === 'email',
-  )
-  if (explicit) return explicit
-  // 2. Name/id/aria/placeholder hints, excluding search/OTP fields.
-  const byHint = all.find(
-    (i) =>
-      (i.type === 'text' || i.type === 'tel' || i.type === '') &&
-      USER_HINT.test(fieldText(i)) &&
-      !NON_USER_HINT.test(fieldText(i)),
-  )
-  if (byHint) return byHint
-  // 3. The visible text/email field immediately preceding the password.
-  if (pw) {
-    const idx = all.indexOf(pw)
-    for (let i = idx - 1; i >= 0; i--) {
-      const t = all[i].type
-      if ((t === 'text' || t === 'email' || t === 'tel') && !NON_USER_HINT.test(fieldText(all[i]))) {
-        return all[i]
-      }
-    }
-  }
-  return null
-}
-
+// ---------- autofill helpers ----------
 function setValue(input: HTMLInputElement, value: string): void {
   input.focus()
   input.value = value
@@ -91,11 +37,15 @@ interface FillMessage {
 
 chrome.runtime.onMessage.addListener((msg: FillMessage, _sender, sendResponse) => {
   if (msg.type !== 'fillCredentials') return
-  const pw = findPasswordField()
-  const user = findUsernameField(pw)
+  const pw = findPasswordField(document)
+  const user = findUsernameField(document, pw)
+  // The popup broadcasts to every frame; frames without login fields stay silent so
+  // the field-bearing frame is the one that answers (and we don't hold the channel
+  // open from empty frames).
+  if (!pw && !user) return
   if (user) setValue(user, msg.username)
   if (pw) setValue(pw, msg.password)
-  sendResponse({ ok: Boolean(pw || user) })
+  sendResponse({ ok: true })
   return true
 })
 
@@ -107,14 +57,27 @@ let lastSignature = ''
 let rememberedUsername = ''
 
 function rememberUsername(): void {
-  const u = findUsernameField(null)
+  const u = findUsernameField(document, null)
   if (u && u.value.trim()) rememberedUsername = u.value.trim()
 }
 
+/**
+ * Cross-document multi-step: on a genuine username-first step (a username typed,
+ * no password field on the page at all), hand the username to the worker so the
+ * password-only page that follows a full navigation can be captured with it.
+ */
+async function rememberUsernameAcrossPages(): Promise<void> {
+  if (passwordFields(document).length > 0) return // not a username-only step
+  const u = findUsernameField(document, null)
+  const username = (u?.value.trim() || rememberedUsername).trim()
+  if (!username) return
+  await sendMessage({ type: 'rememberUsername', hostname: location.hostname, username })
+}
+
 function collectCredentials(): { username: string; password: string } | null {
-  const pw = findPasswordField(true)
+  const pw = findPasswordField(document, true)
   if (!pw || !pw.value) return null
-  const user = findUsernameField(pw)
+  const user = findUsernameField(document, pw)
   // Fall back to the remembered username when this step has no visible username field.
   const username = user?.value.trim() || rememberedUsername
   return { username, password: pw.value }
@@ -146,17 +109,36 @@ document.addEventListener(
   true,
 )
 
-// Real form submits.
-document.addEventListener('submit', () => void captureNow(), true)
+// On a username-only step, push the username to the worker before navigating away.
+document.addEventListener(
+  'change',
+  (e) => {
+    const t = e.target as HTMLInputElement | null
+    if (t?.tagName === 'INPUT' && t.type !== 'password') void rememberUsernameAcrossPages()
+  },
+  true,
+)
+
+// Real form submits: capture a password step, or remember a username-only step.
+document.addEventListener(
+  'submit',
+  () => {
+    void captureNow()
+    void rememberUsernameAcrossPages()
+  },
+  true,
+)
 
 // JS logins that don't fire a form submit: capture after a click on a submit-like
-// control while a password field holds a value. Deferred so the value settles.
+// control while a password field holds a value. Deferred so the value settles. On a
+// username-only step (the "Next" button), remember the username for the next page.
 document.addEventListener(
   'click',
   (e) => {
     const el = (e.target as HTMLElement)?.closest('button, input[type="submit"], [role="button"]')
     if (!el) return
-    if (findPasswordField(true)) setTimeout(() => void captureNow(), 0)
+    if (findPasswordField(document, true)) setTimeout(() => void captureNow(), 0)
+    else void rememberUsernameAcrossPages()
   },
   true,
 )
@@ -165,7 +147,8 @@ document.addEventListener(
 // Snapshot the credentials synchronously *before* the route swaps the form out.
 function hookSpaNavigation(): void {
   const fire = (): void => {
-    if (findPasswordField(true)) void captureNow()
+    if (findPasswordField(document, true)) void captureNow()
+    else void rememberUsernameAcrossPages()
   }
   const wrap = (name: 'pushState' | 'replaceState'): void => {
     const orig = history[name].bind(history)
@@ -184,6 +167,12 @@ hookSpaNavigation()
 const BANNER_ID = 'pass123-capture-banner'
 
 async function maybeShowBanner(): Promise<void> {
+  // Only the top frame renders the banner. A capture made inside an iframe is still
+  // stored in the background (keyed by registrable domain / same-tab window); the
+  // top frame surfaces it on its next load or navigation — which is exactly what an
+  // iframe SSO login that then redirects the parent does. This also stops every ad
+  // iframe from firing a `pendingFor` round-trip on load.
+  if (!isTopFrame) return
   const res = await sendMessage<PendingInfo>({ type: 'pendingFor', hostname: location.hostname })
   if (!res.ok || res.data.action === 'none') return
   renderBanner(res.data)

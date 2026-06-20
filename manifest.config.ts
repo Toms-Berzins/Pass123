@@ -42,6 +42,13 @@ export default defineManifest({
       js: ['src/content.ts'],
       matches: ['http://*/*', 'https://*/*'],
       run_at: 'document_idle',
+      // Spike 1: inject into sub-frames too, so login forms inside (cross-origin)
+      // iframes — embedded SSO widgets, framed sign-ins — get detected and filled.
+      // A cross-origin iframe is an isolated world the top frame's JS can't reach,
+      // so per-frame injection is the only way in. Cost is bounded: the script is
+      // near-inert at idle and the banner/pending round-trips are gated to the top
+      // frame (see content.ts), so ad iframes don't add background traffic.
+      all_frames: true,
     },
   ],
 
