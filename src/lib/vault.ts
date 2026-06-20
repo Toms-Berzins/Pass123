@@ -18,6 +18,7 @@ import {
   toBase64,
 } from './crypto'
 import { generateMnemonic, mnemonicToEntropy } from './bip39'
+import { rankMatches } from './urlmatch'
 import {
   readStoredVault,
   writeStoredVault,
@@ -212,18 +213,14 @@ export function newEntry(partial: Omit<VaultEntry, 'id' | 'createdAt' | 'updated
   return { id: crypto.randomUUID(), createdAt: now, updatedAt: now, ...partial }
 }
 
-/** Find entries whose stored URL matches a page hostname. */
+/**
+ * Find entries whose stored URL matches a page hostname, best match first.
+ * Matching is by registrable domain (eTLD+1) with exact-host preferred over
+ * subdomain over sibling-subdomain — see `urlmatch.ts`. This is the v0.5 autofill
+ * improvement: a saved `example.com` now also surfaces on `login.example.com`.
+ */
 export function matchEntries(data: VaultData, hostname: string): VaultEntry[] {
-  const host = hostname.replace(/^www\./, '').toLowerCase()
-  return data.entries.filter((e) => {
-    if (!e.url) return false
-    try {
-      const u = new URL(e.url.includes('://') ? e.url : `https://${e.url}`)
-      return u.hostname.replace(/^www\./, '').toLowerCase() === host
-    } catch {
-      return e.url.toLowerCase().includes(host)
-    }
-  })
+  return rankMatches(data.entries, hostname)
 }
 
 export type CaptureAction =

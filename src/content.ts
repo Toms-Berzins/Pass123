@@ -14,23 +14,62 @@
 import { sendMessage, type PendingInfo } from './lib/messages'
 
 // ---------- field detection ----------
+/** Skip fields the user can't actually be logging in with (hidden, disabled, off-screen). */
+function isVisible(el: HTMLInputElement): boolean {
+  if (el.hidden || el.disabled || el.type === 'hidden') return false
+  return el.offsetParent !== null || el.getClientRects().length > 0
+}
+
+const USER_HINT = /user|email|login|account|phone|mobile|nick/i
+const NON_USER_HINT = /search|query|otp|code|totp|2fa|captcha/i
+
+/** All the identifying text on a field, lower-cased, for heuristic matching. */
+function fieldText(el: HTMLInputElement): string {
+  return `${el.name} ${el.id} ${el.getAttribute('aria-label') ?? ''} ${el.placeholder} ${el.autocomplete}`
+}
+
+function passwordFields(): HTMLInputElement[] {
+  return [...document.querySelectorAll<HTMLInputElement>('input[type="password"]')].filter(isVisible)
+}
+
 function findPasswordField(requireValue = false): HTMLInputElement | null {
-  const fields = [...document.querySelectorAll<HTMLInputElement>('input[type="password"]')]
-  if (requireValue) return fields.find((f) => f.value) ?? null
-  return fields[0] ?? null
+  const fields = passwordFields()
+  if (requireValue) {
+    // The one the user actually typed into — prefer an explicit current-password.
+    return (
+      fields.find((f) => f.value && f.autocomplete === 'current-password') ??
+      fields.find((f) => f.value) ??
+      null
+    )
+  }
+  // For autofill, target the login (current-password) field over a new-password one.
+  return fields.find((f) => f.autocomplete === 'current-password') ?? fields[0] ?? null
 }
 
 function findUsernameField(pw: HTMLInputElement | null): HTMLInputElement | null {
-  const explicit = document.querySelector<HTMLInputElement>(
-    'input[autocomplete="username"], input[type="email"], input[name*="user" i], input[name*="email" i]',
+  const all = [...document.querySelectorAll<HTMLInputElement>('input')].filter(isVisible)
+  // 1. Explicit signal: autocomplete or an email field.
+  const explicit = all.find(
+    (i) => i.autocomplete === 'username' || i.autocomplete === 'email' || i.type === 'email',
   )
   if (explicit) return explicit
-  if (!pw) return null
-  const inputs = [...document.querySelectorAll<HTMLInputElement>('input')]
-  const pwIndex = inputs.indexOf(pw)
-  for (let i = pwIndex - 1; i >= 0; i--) {
-    const t = inputs[i].type
-    if (t === 'text' || t === 'email') return inputs[i]
+  // 2. Name/id/aria/placeholder hints, excluding search/OTP fields.
+  const byHint = all.find(
+    (i) =>
+      (i.type === 'text' || i.type === 'tel' || i.type === '') &&
+      USER_HINT.test(fieldText(i)) &&
+      !NON_USER_HINT.test(fieldText(i)),
+  )
+  if (byHint) return byHint
+  // 3. The visible text/email field immediately preceding the password.
+  if (pw) {
+    const idx = all.indexOf(pw)
+    for (let i = idx - 1; i >= 0; i--) {
+      const t = all[i].type
+      if ((t === 'text' || t === 'email' || t === 'tel') && !NON_USER_HINT.test(fieldText(all[i]))) {
+        return all[i]
+      }
+    }
   }
   return null
 }
@@ -62,12 +101,23 @@ chrome.runtime.onMessage.addListener((msg: FillMessage, _sender, sendResponse) =
 
 // ---------- capture-on-submit ----------
 let lastSignature = ''
+// Username typed on an earlier step of a multi-step / SPA login, where the password
+// appears on a later step. Lives only in this isolated content world — it is never
+// written back to the page DOM, and it dies with the document on a full navigation.
+let rememberedUsername = ''
+
+function rememberUsername(): void {
+  const u = findUsernameField(null)
+  if (u && u.value.trim()) rememberedUsername = u.value.trim()
+}
 
 function collectCredentials(): { username: string; password: string } | null {
   const pw = findPasswordField(true)
   if (!pw || !pw.value) return null
   const user = findUsernameField(pw)
-  return { username: user?.value ?? '', password: pw.value }
+  // Fall back to the remembered username when this step has no visible username field.
+  const username = user?.value.trim() || rememberedUsername
+  return { username, password: pw.value }
 }
 
 async function captureNow(): Promise<void> {
@@ -86,6 +136,16 @@ async function captureNow(): Promise<void> {
   if (res.ok && res.data.stored) void maybeShowBanner()
 }
 
+// Keep the username in view as it's typed, so a later password-only step can pair it.
+document.addEventListener(
+  'input',
+  (e) => {
+    const t = e.target as HTMLInputElement | null
+    if (t?.tagName === 'INPUT' && t.type !== 'password') rememberUsername()
+  },
+  true,
+)
+
 // Real form submits.
 document.addEventListener('submit', () => void captureNow(), true)
 
@@ -100,6 +160,25 @@ document.addEventListener(
   },
   true,
 )
+
+// SPA logins that navigate via the History API instead of submitting a form.
+// Snapshot the credentials synchronously *before* the route swaps the form out.
+function hookSpaNavigation(): void {
+  const fire = (): void => {
+    if (findPasswordField(true)) void captureNow()
+  }
+  const wrap = (name: 'pushState' | 'replaceState'): void => {
+    const orig = history[name].bind(history)
+    history[name] = ((...args: unknown[]) => {
+      fire()
+      return (orig as (...a: unknown[]) => unknown)(...args)
+    }) as History[typeof name]
+  }
+  wrap('pushState')
+  wrap('replaceState')
+  window.addEventListener('popstate', fire, true)
+}
+hookSpaNavigation()
 
 // ---------- banner ----------
 const BANNER_ID = 'pass123-capture-banner'

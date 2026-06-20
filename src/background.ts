@@ -26,6 +26,7 @@ import {
   type VaultEntry,
 } from './lib/vault'
 import { decryptImport, encryptExport, mergeEntries } from './lib/backup'
+import { registrableDomain } from './lib/urlmatch'
 import { fromBase64 } from './lib/crypto'
 import { clearVault, vaultExists } from './lib/storage'
 import {
@@ -37,6 +38,10 @@ import {
 
 const AUTO_LOCK_ALARM = 'pass123-auto-lock'
 const PENDING_TTL_MS = 2 * 60 * 1000
+// Window in which a captured login may still be claimed by a *different-domain*
+// landing page in the SAME tab — i.e. a submit-then-redirect across hosts. Kept
+// short so a redirect is caught but later unrelated navigation in that tab is not.
+const CROSS_HOST_WINDOW_MS = 90 * 1000
 
 // In-memory only. Never persisted.
 let sessionKey: CryptoKey | null = null
@@ -52,6 +57,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 /** Credentials captured on submit, awaiting the user's save/update confirmation. */
 interface PendingCapture {
+  /** The original submit host, shown in the banner (not the landing host). */
   hostname: string
   username: string
   password: string
@@ -59,8 +65,19 @@ interface PendingCapture {
   id?: string
   title?: string
   ts: number
+  /** Tab the submit happened in — used to claim a cross-host redirect landing. */
+  tabId?: number
+  /** True once a banner has been surfaced via the cross-host (key-miss) fallback. */
+  crossHostSurfaced: boolean
 }
+// Keyed by registrable domain (eTLD+1) so a submit on accounts.example.com and a
+// landing on www.example.com resolve to the same pending entry.
 const pending = new Map<string, PendingCapture>()
+
+/** Registrable-domain key for the pending map, with a hostname fallback. */
+function pendingKey(hostname: string): string {
+  return registrableDomain(hostname) || hostname
+}
 
 function lock(): void {
   sessionKey = null
@@ -76,13 +93,45 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === AUTO_LOCK_ALARM) lock()
 })
 
+/**
+ * Find the pending capture a page should offer to save. First by registrable
+ * domain (the common same-site / subdomain-redirect case). On a miss, fall back
+ * to a capture from the *same tab* still inside the cross-host window — this is
+ * the submit-on-host-A, land-on-host-B redirect — surfaced at most once so it
+ * doesn't reappear on later unrelated navigation in that tab. Drops stale entries.
+ */
+function resolvePending(hostname: string, tabId?: number): PendingCapture | null {
+  const now = Date.now()
+  const key = pendingKey(hostname)
+  const direct = pending.get(key)
+  if (direct) {
+    if (now - direct.ts > PENDING_TTL_MS) {
+      pending.delete(key)
+    } else {
+      return direct
+    }
+  }
+  if (tabId === undefined) return null
+  for (const [k, p] of pending) {
+    if (now - p.ts > PENDING_TTL_MS) {
+      pending.delete(k)
+      continue
+    }
+    if (p.tabId === tabId && !p.crossHostSurfaced && now - p.ts <= CROSS_HOST_WINDOW_MS) {
+      p.crossHostSurfaced = true
+      return p
+    }
+  }
+  return null
+}
+
 async function requireData(): Promise<{ key: CryptoKey; data: VaultData }> {
   if (!sessionKey) throw new Error('Vault is locked')
   const data = await loadData(sessionKey)
   return { key: sessionKey, data }
 }
 
-async function handle(req: Request): Promise<unknown> {
+async function handle(req: Request, tabId?: number): Promise<unknown> {
   switch (req.type) {
     case 'status': {
       const res: StatusResponse = { exists: await vaultExists(), unlocked: sessionKey !== null }
@@ -164,11 +213,12 @@ async function handle(req: Request): Promise<unknown> {
       if (!settings.captureEnabled || !sessionKey) return { stored: false }
       const data = await loadData(sessionKey)
       const decision = captureDecision(data, req.hostname, req.username, req.password)
+      const key = pendingKey(req.hostname)
       if (decision.kind === 'none') {
-        pending.delete(req.hostname)
+        pending.delete(key)
         return { stored: false }
       }
-      pending.set(req.hostname, {
+      pending.set(key, {
         hostname: req.hostname,
         username: req.username,
         password: req.password,
@@ -176,17 +226,16 @@ async function handle(req: Request): Promise<unknown> {
         id: decision.kind === 'update' ? decision.id : undefined,
         title: decision.kind === 'update' ? decision.title : undefined,
         ts: Date.now(),
+        tabId,
+        crossHostSurfaced: false,
       })
       armAutoLock()
       return { stored: true }
     }
     case 'pendingFor': {
-      const p = pending.get(req.hostname)
-      const stale = p ? Date.now() - p.ts > PENDING_TTL_MS : false
-      if (!p || stale || !sessionKey) {
-        if (stale) pending.delete(req.hostname)
-        return { action: 'none', hostname: req.hostname, username: '' } satisfies PendingInfo
-      }
+      if (!sessionKey) return { action: 'none', hostname: req.hostname, username: '' } satisfies PendingInfo
+      const p = resolvePending(req.hostname, tabId)
+      if (!p) return { action: 'none', hostname: req.hostname, username: '' } satisfies PendingInfo
       return {
         action: p.action,
         hostname: p.hostname,
@@ -195,7 +244,7 @@ async function handle(req: Request): Promise<unknown> {
       } satisfies PendingInfo
     }
     case 'captureConfirm': {
-      const p = pending.get(req.hostname)
+      const p = pending.get(pendingKey(req.hostname))
       if (!p) throw new Error('Nothing to save')
       const { key, data } = await requireData()
       if (p.action === 'save') {
@@ -209,12 +258,12 @@ async function handle(req: Request): Promise<unknown> {
         }
       }
       await saveData(key, data)
-      pending.delete(req.hostname)
+      pending.delete(pendingKey(req.hostname))
       armAutoLock()
       return { saved: true }
     }
     case 'captureDismiss': {
-      pending.delete(req.hostname)
+      pending.delete(pendingKey(req.hostname))
       return { dismissed: true }
     }
     case 'biometricInfo': {
@@ -261,8 +310,8 @@ async function handle(req: Request): Promise<unknown> {
   }
 }
 
-chrome.runtime.onMessage.addListener((req: Request, _sender, sendResponse) => {
-  handle(req)
+chrome.runtime.onMessage.addListener((req: Request, sender, sendResponse) => {
+  handle(req, sender.tab?.id)
     .then((data) => sendResponse({ ok: true, data } satisfies Response))
     .catch((err: unknown) =>
       sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) } satisfies Response),

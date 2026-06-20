@@ -85,6 +85,23 @@ describe('matchEntries', () => {
   it('returns nothing for unknown hosts', () => {
     expect(matchEntries(data, 'nope.test')).toEqual([])
   })
+
+  it('surfaces an apex entry on a subdomain of the same site (v0.5)', () => {
+    // The whole point of registrable-domain matching: a saved example.com entry
+    // should now autofill on login.example.com.
+    expect(matchEntries(data, 'login.example.com').map((e) => e.title)).toEqual(['WWW'])
+  })
+
+  it('ranks the more specific host first', () => {
+    const ranked: VaultData = {
+      entries: [
+        newEntry({ title: 'Sibling', url: 'mail.acme.com', username: 'a', password: '', notes: '' }),
+        newEntry({ title: 'Exact', url: 'login.acme.com', username: 'b', password: '', notes: '' }),
+        newEntry({ title: 'Apex', url: 'acme.com', username: 'c', password: '', notes: '' }),
+      ],
+    }
+    expect(matchEntries(ranked, 'login.acme.com').map((e) => e.title)).toEqual(['Exact', 'Apex', 'Sibling'])
+  })
 })
 
 describe('captureDecision', () => {
@@ -110,5 +127,16 @@ describe('captureDecision', () => {
   it('offers to update when the same username has a different password', () => {
     const decision = captureDecision(data, 'github.com', 'me', 'new-password')
     expect(decision).toEqual({ kind: 'update', id: entry.id, title: 'GitHub' })
+  })
+
+  it('treats a subdomain login as the same account for update (v0.5)', () => {
+    // Logging in as the saved user on a subdomain should update, not duplicate.
+    const decision = captureDecision(data, 'gist.github.com', 'me', 'rotated')
+    expect(decision).toEqual({ kind: 'update', id: entry.id, title: 'GitHub' })
+  })
+
+  it('does not cross registrable domains when deciding (wrong-account safety)', () => {
+    // A login on an unrelated site must never resolve to this entry.
+    expect(captureDecision(data, 'github.io', 'me', 'whatever').kind).toBe('save')
   })
 })

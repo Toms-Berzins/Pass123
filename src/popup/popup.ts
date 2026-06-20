@@ -1,6 +1,7 @@
 import './popup.css'
 import { sendMessage, type StatusResponse } from '../lib/messages'
 import type { VaultEntry } from '../lib/vault'
+import { rankMatches } from '../lib/urlmatch'
 import {
   generateTOTP,
   isValidTOTPSecret,
@@ -426,13 +427,27 @@ async function renderVault(): Promise<void> {
       <input id="search" type="text" placeholder="Search…" style="flex:1" />
       <button id="addBtn" class="small" style="margin-left:8px">+ Add</button>
     </div>
+    <div id="forSite"></div>
     <div class="list" id="list"></div>
   `
   byId<HTMLButtonElement>('addBtn').addEventListener('click', () => renderEntryForm())
   const search = byId<HTMLInputElement>('search')
   const list = byId<HTMLDivElement>('list')
+  const forSite = byId<HTMLDivElement>('forSite')
+
+  // Surface entries for the page the user is actually on, best match first.
+  const host = await activeTabHostname()
+  const siteMatches = host ? rankMatches(entries, host) : []
 
   const draw = (q: string) => {
+    // The "for this site" section is a no-query convenience; hide it while searching.
+    if (!q && siteMatches.length > 0) {
+      forSite.innerHTML = `<p class="section-label">For this site${host ? ` · ${escapeHtml(host)}` : ''}</p>`
+      for (const e of siteMatches) forSite.appendChild(entryCard(e))
+    } else {
+      forSite.innerHTML = ''
+    }
+
     const filtered = entries.filter(
       (e) =>
         e.title.toLowerCase().includes(q) ||
@@ -443,11 +458,21 @@ async function renderVault(): Promise<void> {
       list.innerHTML = `<p class="empty">${entries.length ? 'No matches.' : 'No saved passwords yet.'}</p>`
       return
     }
-    list.innerHTML = ''
+    list.innerHTML = q || siteMatches.length === 0 ? '' : `<p class="section-label">All passwords</p>`
     for (const e of filtered) list.appendChild(entryCard(e))
   }
   search.addEventListener('input', () => draw(search.value.toLowerCase().trim()))
   draw('')
+}
+
+/** Hostname of the active tab, or '' for non-web pages (chrome://, etc.). */
+async function activeTabHostname(): Promise<string> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    return tab?.url ? new URL(tab.url).hostname : ''
+  } catch {
+    return ''
+  }
 }
 
 function entryCard(e: VaultEntry): HTMLElement {
