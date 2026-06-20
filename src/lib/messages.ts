@@ -15,6 +15,11 @@ export type Request =
   // Encrypted backup: export entries under an export password; import merges them back.
   | { type: 'exportVault'; exportPassword: string }
   | { type: 'importVault'; json: string; exportPassword: string }
+  // Biometric unlock (WebAuthn PRF). prfOutput/credentialId are base64 from the popup.
+  | { type: 'biometricInfo' } // works while locked
+  | { type: 'addBiometric'; currentSecret: string; prfOutput: string; credentialId: string }
+  | { type: 'unlockBiometric'; prfOutput: string }
+  | { type: 'removeBiometric' }
   | { type: 'list' }
   | { type: 'add'; entry: Omit<VaultEntry, 'id' | 'createdAt' | 'updatedAt'> }
   | { type: 'update'; entry: VaultEntry }

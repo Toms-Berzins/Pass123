@@ -14,11 +14,13 @@ const VAULT_KEY = 'pass123.vault'
  */
 export interface KeyWrap {
   method: 'password' | 'recovery' | 'biometric'
-  /** base64 KDF salt for this method */
+  /** base64 KDF salt for this method (HKDF salt for recovery/biometric) */
   salt: string
   iterations: number
   /** the vault key, AES-GCM-encrypted under this method's derived wrapping key */
   wrapped: EncryptedBlob
+  /** biometric only: WebAuthn credential id (base64url) to pass to navigator.credentials.get */
+  credentialId?: string
 }
 
 /** Legacy format (v0.2): the master-derived key encrypts the payload directly. */

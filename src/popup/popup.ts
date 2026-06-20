@@ -8,6 +8,11 @@ import {
   parseTOTPUri,
 } from '../lib/totp'
 import {
+  enrollBiometric,
+  getBiometricPRF,
+  isPlatformAuthenticatorAvailable,
+} from '../lib/webauthn'
+import {
   DEFAULT_OPTIONS,
   DEFAULT_PASSPHRASE,
   entropyBits,
@@ -121,6 +126,7 @@ function renderUnlock(): void {
     </div>
     <p id="err" class="error"></p>
     <button id="unlock">Unlock</button>
+    <div id="bio-slot"></div>
     <button id="useRecovery" class="link" style="margin-top:8px">Forgot it? Use your recovery phrase</button>
   `
   const mp = byId<HTMLInputElement>('mp')
@@ -134,6 +140,26 @@ function renderUnlock(): void {
   byId<HTMLButtonElement>('useRecovery').addEventListener('click', renderRecoverWithPhrase)
   mp.addEventListener('keydown', (e) => e.key === 'Enter' && submit())
   mp.focus()
+
+  // Offer biometric unlock if it's enrolled and a platform authenticator is present.
+  void (async () => {
+    const info = await sendMessage<{ credentialId: string | null }>({ type: 'biometricInfo' })
+    if (!info.ok || !info.data.credentialId) return
+    if (!(await isPlatformAuthenticatorAvailable())) return
+    const credentialId = info.data.credentialId
+    const slot = byId<HTMLDivElement>('bio-slot')
+    slot.innerHTML = `<button id="bioUnlock" class="ghost" style="margin-top:8px">Unlock with ${escapeHtml(biometricName())}</button>`
+    byId<HTMLButtonElement>('bioUnlock').addEventListener('click', async () => {
+      try {
+        const prfOutput = await getBiometricPRF(credentialId)
+        const res = await sendMessage({ type: 'unlockBiometric', prfOutput })
+        if (!res.ok) return (err.textContent = 'Biometric unlock failed.')
+        void route()
+      } catch (e) {
+        err.textContent = (e as Error).message
+      }
+    })
+  })()
 }
 
 // ---------- Recovery phrase: onboarding / regenerate ----------
@@ -571,6 +597,11 @@ function renderSettings(): void {
     <div id="rec-action"></div>
 
     <hr style="border:none;border-top:1px solid var(--border);margin:6px 0" />
+    <label>Biometric unlock</label>
+    <p id="bio-state" class="hint">Checking…</p>
+    <div id="bio-action"></div>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:6px 0" />
     <label>Backup &amp; restore</label>
     <p class="hint">An encrypted backup file you can store anywhere — protected by a separate export password.</p>
     <div class="row">
@@ -615,6 +646,8 @@ function renderSettings(): void {
     btn.addEventListener('click', () => promptForRecovery())
     action.appendChild(btn)
   })()
+
+  void renderBiometricSetting()
 
   byId<HTMLButtonElement>('export-btn').addEventListener('click', renderExport)
   byId<HTMLButtonElement>('import-btn').addEventListener('click', renderImport)
@@ -700,6 +733,81 @@ function renderImport(): void {
 function backToSettings(): void {
   lockBtn.hidden = false
   renderMain('settings')
+}
+
+// ---------- Biometric unlock ----------
+/** OS-aware label for the platform authenticator. */
+function biometricName(): string {
+  const ua = navigator.userAgent
+  if (/Windows/.test(ua)) return 'Windows Hello'
+  if (/Mac|iPhone|iPad/.test(ua)) return 'Touch ID'
+  if (/Android/.test(ua)) return 'fingerprint'
+  return 'biometrics'
+}
+
+/** Render the Settings biometric row: enable, disable, or "unavailable". */
+async function renderBiometricSetting(): Promise<void> {
+  const state = byId<HTMLParagraphElement>('bio-state')
+  const action = byId<HTMLDivElement>('bio-action')
+  action.innerHTML = ''
+  if (!(await isPlatformAuthenticatorAvailable())) {
+    state.textContent = `No ${biometricName()} authenticator is available on this device.`
+    return
+  }
+  const info = await sendMessage<{ credentialId: string | null }>({ type: 'biometricInfo' })
+  const enabled = info.ok && !!info.data.credentialId
+  state.textContent = enabled
+    ? `${biometricName()} unlock is on. Your vault key is wrapped by this device's authenticator.`
+    : `Unlock with ${biometricName()} instead of typing your master password.`
+  const btn = document.createElement('button')
+  btn.className = 'ghost small'
+  btn.textContent = enabled ? `Turn off ${biometricName()} unlock` : `Enable ${biometricName()} unlock`
+  btn.addEventListener('click', async () => {
+    if (enabled) {
+      await sendMessage({ type: 'removeBiometric' })
+      void renderBiometricSetting()
+    } else {
+      renderEnableBiometric()
+    }
+  })
+  action.appendChild(btn)
+}
+
+/** Confirm the master password, then enroll a platform credential and wrap the vault key. */
+function renderEnableBiometric(): void {
+  app.innerHTML = `
+    <p class="hint">Confirm your master password, then ${escapeHtml(biometricName())} will prompt you. Your master password keeps working as a fallback.</p>
+    <div><label for="bmp">Master password</label><input id="bmp" type="password" autocomplete="current-password" /></div>
+    <p id="err" class="error"></p>
+    <div class="row">
+      <button id="go">Continue</button>
+      <button id="cancel" class="ghost">Cancel</button>
+    </div>
+  `
+  const bmp = byId<HTMLInputElement>('bmp')
+  const err = byId<HTMLParagraphElement>('err')
+  byId<HTMLButtonElement>('cancel').addEventListener('click', () => renderMain('settings'))
+  const go = async () => {
+    const check = await sendMessage({ type: 'unlock', masterPassword: bmp.value })
+    if (!check.ok) return (err.textContent = 'Wrong master password.')
+    err.textContent = `Waiting for ${biometricName()}…`
+    try {
+      const { credentialId, prfOutput } = await enrollBiometric()
+      const res = await sendMessage({
+        type: 'addBiometric',
+        currentSecret: bmp.value,
+        prfOutput,
+        credentialId,
+      })
+      if (!res.ok) return (err.textContent = res.error)
+      renderMain('settings')
+    } catch (e) {
+      err.textContent = (e as Error).message
+    }
+  }
+  byId<HTMLButtonElement>('go').addEventListener('click', go)
+  bmp.addEventListener('keydown', (e) => e.key === 'Enter' && go())
+  bmp.focus()
 }
 
 /** Confirm the master password before (re)generating a recovery phrase from Settings. */

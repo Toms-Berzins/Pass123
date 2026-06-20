@@ -124,6 +124,59 @@ export async function hasRecoveryPhrase(): Promise<boolean> {
 }
 
 /**
+ * Wrap the vault key under a WebAuthn PRF output (HKDF), tagged `biometric`.
+ * `prfOutput` is the high-entropy bytes the platform authenticator returns after a
+ * biometric check — treated exactly like the recovery phrase's entropy. Replaces any
+ * existing biometric wrap (one authenticator at a time). Purely additive: the vault
+ * key and data are never touched, only a wrap is appended.
+ */
+export async function addBiometricWrap(
+  currentSecret: string,
+  prfOutput: Uint8Array,
+  credentialId: string,
+): Promise<void> {
+  const stored = await requireStored()
+  if (stored.version !== 2) throw new Error('Vault must be migrated before adding biometric unlock')
+  const vaultKeyBytes = await unwrapVaultKeyBytes(stored, currentSecret)
+  const salt = randomSalt()
+  const wrappingKey = await deriveKeyFromEntropy(prfOutput, salt)
+  const wrapped = await encryptBytes(wrappingKey, vaultKeyBytes)
+  const wrap: KeyWrap = { method: 'biometric', salt: toBase64(salt), iterations: 0, wrapped, credentialId }
+  const keyWraps = [...stored.keyWraps.filter((w) => w.method !== 'biometric'), wrap]
+  await writeStoredVault({ ...stored, keyWraps })
+}
+
+/** Unlock via the biometric wrap using the PRF output from a WebAuthn assertion. */
+export async function unlockWithBiometric(
+  prfOutput: Uint8Array,
+): Promise<{ key: CryptoKey; data: VaultData }> {
+  const stored = await requireStored()
+  if (stored.version !== 2) throw new Error('Vault is not in the wrapping format')
+  const wrap = stored.keyWraps.find((w) => w.method === 'biometric')
+  if (!wrap) throw new Error('Biometric unlock is not set up')
+  const wrappingKey = await deriveKeyFromEntropy(prfOutput, fromBase64(wrap.salt))
+  const bytes = await decryptBytes(wrappingKey, wrap.wrapped) // throws on wrong PRF (GCM auth)
+  const vaultKey = await importVaultKey(bytes)
+  const data = await decryptJSON<VaultData>(vaultKey, stored.payload)
+  return { key: vaultKey, data }
+}
+
+/** The stored biometric credential id (base64url), or null if not set up. Safe to call while locked. */
+export async function getBiometricCredentialId(): Promise<string | null> {
+  const stored = await readStoredVault()
+  if (stored?.version !== 2) return null
+  return stored.keyWraps.find((w) => w.method === 'biometric')?.credentialId ?? null
+}
+
+/** Drop the biometric wrap (disable biometric unlock). Other unlock methods are untouched. */
+export async function removeBiometricWrap(): Promise<void> {
+  const stored = await requireStored()
+  if (stored.version !== 2) return
+  const keyWraps = stored.keyWraps.filter((w) => w.method !== 'biometric')
+  await writeStoredVault({ ...stored, keyWraps })
+}
+
+/**
  * Replace the password wrap with one derived from `newMasterPassword`. `currentSecret`
  * may be the old master password OR the recovery phrase — so this backs both "change
  * master password" and "I recovered with my phrase, now set a new password." The vault

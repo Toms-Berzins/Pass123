@@ -8,20 +8,25 @@
 
 import type { PendingInfo, Request, Response, StatusResponse } from './lib/messages'
 import {
+  addBiometricWrap,
   captureDecision,
   changeMasterPassword,
   createVault,
+  getBiometricCredentialId,
   hasRecoveryPhrase,
   loadData,
   matchEntries,
   newEntry,
+  removeBiometricWrap,
   saveData,
   setupRecoveryPhrase,
   unlockVault,
+  unlockWithBiometric,
   type VaultData,
   type VaultEntry,
 } from './lib/vault'
 import { decryptImport, encryptExport, mergeEntries } from './lib/backup'
+import { fromBase64 } from './lib/crypto'
 import { clearVault, vaultExists } from './lib/storage'
 import {
   DEFAULT_SETTINGS,
@@ -211,6 +216,26 @@ async function handle(req: Request): Promise<unknown> {
     case 'captureDismiss': {
       pending.delete(req.hostname)
       return { dismissed: true }
+    }
+    case 'biometricInfo': {
+      // Safe while locked — only reads the non-secret credential id from storage.
+      return { credentialId: await getBiometricCredentialId() }
+    }
+    case 'addBiometric': {
+      await addBiometricWrap(req.currentSecret, fromBase64(req.prfOutput), req.credentialId)
+      armAutoLock()
+      return { ok: true }
+    }
+    case 'unlockBiometric': {
+      const { key } = await unlockWithBiometric(fromBase64(req.prfOutput)) // throws on wrong PRF
+      sessionKey = key
+      armAutoLock()
+      return { unlocked: true }
+    }
+    case 'removeBiometric': {
+      if (!sessionKey) throw new Error('Unlock the vault first')
+      await removeBiometricWrap()
+      return { removed: true }
     }
     case 'exportVault': {
       // Encrypt the live entries under the export password; plaintext never leaves here.
