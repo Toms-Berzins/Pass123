@@ -7,6 +7,14 @@ export type Request =
   | { type: 'create'; masterPassword: string }
   | { type: 'unlock'; masterPassword: string }
   | { type: 'lock' }
+  // Recovery phrase (v0.3): generate/replace the BIP39 phrase, and reset the master
+  // password using either the old password or the recovery phrase as `currentSecret`.
+  | { type: 'setupRecovery'; currentSecret: string }
+  | { type: 'hasRecovery' }
+  | { type: 'changeMaster'; currentSecret: string; newMasterPassword: string }
+  // Encrypted backup: export entries under an export password; import merges them back.
+  | { type: 'exportVault'; exportPassword: string }
+  | { type: 'importVault'; json: string; exportPassword: string }
   | { type: 'list' }
   | { type: 'add'; entry: Omit<VaultEntry, 'id' | 'createdAt' | 'updatedAt'> }
   | { type: 'update'; entry: VaultEntry }

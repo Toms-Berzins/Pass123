@@ -1,5 +1,7 @@
 /** Password & passphrase generation with a cryptographically secure RNG. */
 
+import { WORDLIST } from './bip39-wordlist'
+
 export interface GeneratorOptions {
   length: number
   lowercase: boolean
@@ -69,6 +71,52 @@ export function poolSize(opts: GeneratorOptions): number {
   if (opts.symbols) pool += SETS.symbols
   if (opts.excludeAmbiguous) pool = [...pool].filter((c) => !AMBIGUOUS.has(c)).join('')
   return pool.length
+}
+
+// ---------- Passphrase (diceware-style) ----------
+
+export interface PassphraseOptions {
+  /** Number of words. */
+  words: number
+  /** Joiner between words. */
+  separator: string
+  /** Capitalize the first letter of each word. */
+  capitalize: boolean
+  /** Append a random digit (0–9) as an extra token. */
+  includeNumber: boolean
+}
+
+export const DEFAULT_PASSPHRASE: PassphraseOptions = {
+  words: 4,
+  separator: '-',
+  capitalize: false,
+  includeNumber: false,
+}
+
+// The recovery wordlist doubles as the passphrase wordlist: 2048 words = 11 bits each.
+const PASSPHRASE_WORDS = 2048
+
+/** Generate a passphrase by drawing uniformly-random words from the wordlist. */
+export function generatePassphrase(opts: PassphraseOptions): string {
+  const count = Math.max(3, Math.min(12, opts.words))
+  const parts: string[] = []
+  for (let i = 0; i < count; i++) {
+    let word = WORDLIST[secureIndex(PASSPHRASE_WORDS)]
+    if (opts.capitalize) word = word[0].toUpperCase() + word.slice(1)
+    parts.push(word)
+  }
+  if (opts.includeNumber) parts.push(String(secureIndex(10)))
+  return parts.join(opts.separator)
+}
+
+/**
+ * Entropy of a passphrase. Words contribute log2(2048)=11 bits each; an optional
+ * appended digit adds log2(10). Capitalization is deterministic, so it adds nothing.
+ */
+export function passphraseEntropyBits(opts: PassphraseOptions): number {
+  const count = Math.max(3, Math.min(12, opts.words))
+  const bits = count * Math.log2(PASSPHRASE_WORDS) + (opts.includeNumber ? Math.log2(10) : 0)
+  return Math.round(bits)
 }
 
 export type Strength = 'weak' | 'fair' | 'good' | 'strong'

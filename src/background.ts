@@ -9,15 +9,19 @@
 import type { PendingInfo, Request, Response, StatusResponse } from './lib/messages'
 import {
   captureDecision,
+  changeMasterPassword,
   createVault,
+  hasRecoveryPhrase,
   loadData,
   matchEntries,
   newEntry,
   saveData,
+  setupRecoveryPhrase,
   unlockVault,
   type VaultData,
   type VaultEntry,
 } from './lib/vault'
+import { decryptImport, encryptExport, mergeEntries } from './lib/backup'
 import { clearVault, vaultExists } from './lib/storage'
 import {
   DEFAULT_SETTINGS,
@@ -94,6 +98,25 @@ async function handle(req: Request): Promise<unknown> {
     case 'lock': {
       lock()
       return { unlocked: false }
+    }
+    case 'setupRecovery': {
+      // Generates a fresh phrase and (re)wraps the vault key under it. Returns the
+      // phrase to the popup exactly once for display; it is never persisted in plaintext.
+      const phrase = await setupRecoveryPhrase(req.currentSecret)
+      armAutoLock()
+      return { phrase }
+    }
+    case 'hasRecovery': {
+      return { hasRecovery: await hasRecoveryPhrase() }
+    }
+    case 'changeMaster': {
+      // currentSecret may be the old master password or the recovery phrase.
+      await changeMasterPassword(req.currentSecret, req.newMasterPassword)
+      // Re-derive the session under the new password so the popup stays unlocked.
+      const { key } = await unlockVault(req.newMasterPassword)
+      sessionKey = key
+      armAutoLock()
+      return { unlocked: true }
     }
     case 'list': {
       const { data } = await requireData()
@@ -188,6 +211,22 @@ async function handle(req: Request): Promise<unknown> {
     case 'captureDismiss': {
       pending.delete(req.hostname)
       return { dismissed: true }
+    }
+    case 'exportVault': {
+      // Encrypt the live entries under the export password; plaintext never leaves here.
+      const { data } = await requireData()
+      const json = await encryptExport(data, req.exportPassword)
+      armAutoLock()
+      return { json }
+    }
+    case 'importVault': {
+      const { key, data } = await requireData()
+      const incoming = await decryptImport(req.json, req.exportPassword) // throws on bad file/pw
+      const { entries, added } = mergeEntries(data.entries, incoming.entries)
+      data.entries = entries
+      await saveData(key, data)
+      armAutoLock()
+      return { added }
     }
     case 'deleteVault': {
       await clearVault()

@@ -118,4 +118,42 @@ button.small { padding: 6px 9px; font-size: 12px; }
 .empty { color: var(--muted); text-align: center; padding: 18px 0; font-size: 13px; }
 .error { color: var(--danger); font-size: 12px; }
 .hint { color: var(--muted); font-size: 11px; }
+
+/* Recovery phrase */
+.mnemonic-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+.mword {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.mword .n { color: var(--muted); font-size: 10px; min-width: 14px; text-align: right; }
+.mword .w { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+.warn {
+  background: rgba(255, 179, 71, 0.1);
+  border: 1px solid var(--fair);
+  color: var(--fair);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 0;
+  cursor: pointer;
+}
+.link:hover { background: none; text-decoration: underline; }
 .list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }

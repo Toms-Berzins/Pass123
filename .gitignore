@@ -12,6 +12,13 @@ dist/
 # Graphify knowledge graph (generated; rebuild with /graphify)
 graphify-out/
 
+# Stray vendored viz libs extracted alongside the graph viewer
+vis-network@*/
+vis-network/
+
+# Local docs (research, business plans, competitor notes — kept out of the repo)
+docs/
+
 # Logs
 npm-debug.log*
 yarn-debug.log*
