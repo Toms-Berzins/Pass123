@@ -544,9 +544,10 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
     <div><label>URL</label><input id="f-url" type="text" placeholder="example.com" value="${attr(e?.url)}" /></div>
     <div><label>Username</label><input id="f-user" type="text" value="${attr(e?.username)}" /></div>
     <div><label>Password</label>
-      <div class="row">
-        <input id="f-pass" type="text" value="${attr(e?.password ?? presetPassword)}" />
-        <button id="f-gen" class="ghost small" style="flex:0 0 auto">⟳</button>
+      <div class="row" id="f-pass-row">
+        <input id="f-pass" type="${e?.password ? 'password' : 'text'}" value="${attr(e?.password ?? presetPassword)}" />
+        <button id="f-reveal" class="ghost small" style="flex:0 0 auto" title="Reveal password" aria-label="Reveal password">${e?.password ? '👁' : '🙈'}</button>
+        <button id="f-gen" class="ghost small" style="flex:0 0 auto" title="Generate">⟳</button>
       </div>
     </div>
     <div><label>2FA secret or otpauth:// URI <span class="hint">(optional)</span></label>
@@ -559,8 +560,25 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
       <button id="cancel" class="ghost">Cancel</button>
     </div>
   `
+  const passEl = byId<HTMLInputElement>('f-pass')
+  const revealBtn = byId<HTMLButtonElement>('f-reveal')
+  // A saved password starts protected: revealing it requires re-verifying the master
+  // password. A password the user generates/types this session has nothing to protect.
+  let needsVerify = Boolean(e?.password)
+  const setRevealed = (on: boolean): void => {
+    passEl.type = on ? 'text' : 'password'
+    revealBtn.textContent = on ? '🙈' : '👁'
+    revealBtn.title = revealBtn.ariaLabel = on ? 'Hide password' : 'Reveal password'
+  }
+  revealBtn.addEventListener('click', async () => {
+    if (passEl.type === 'text') return setRevealed(false) // hide freely
+    if (needsVerify && !(await promptMasterVerify(byId<HTMLDivElement>('f-pass-row')))) return
+    setRevealed(true)
+  })
   byId<HTMLButtonElement>('f-gen').addEventListener('click', () => {
-    byId<HTMLInputElement>('f-pass').value = generatePassword(genOptions)
+    passEl.value = generatePassword(genOptions)
+    needsVerify = false // it's a brand-new secret the user just created
+    setRevealed(true)
   })
   byId<HTMLButtonElement>('cancel').addEventListener('click', () => renderMain('vault'))
   byId<HTMLButtonElement>('save').addEventListener('click', async () => {
@@ -932,6 +950,45 @@ async function autofill(e: VaultEntry): Promise<void> {
   } catch {
     /* content script not present on this page (e.g. chrome:// pages) */
   }
+}
+
+/**
+ * Inline master-password challenge: appends a small verify row under `host` and
+ * resolves true once the worker confirms the password. Used to gate revealing a
+ * saved password. The plaintext already lives in the popup (trusted surface), so
+ * this guards against shoulder-surfing / an unattended unlocked popup, not a
+ * determined attacker.
+ */
+function promptMasterVerify(host: HTMLElement): Promise<boolean> {
+  return new Promise((resolve) => {
+    host.querySelector('.verify-row')?.remove()
+    const row = document.createElement('div')
+    row.className = 'row verify-row'
+    row.style.marginTop = '6px'
+    row.innerHTML = `
+      <input type="password" class="verify-mp" placeholder="Master password to reveal" autocomplete="current-password" style="flex:1" />
+      <button class="small verify-ok" style="flex:0 0 auto">Reveal</button>
+      <button class="ghost small verify-cancel" style="flex:0 0 auto">Cancel</button>`
+    const input = row.querySelector<HTMLInputElement>('.verify-mp')!
+    const done = (result: boolean): void => {
+      row.remove()
+      resolve(result)
+    }
+    row.querySelector<HTMLButtonElement>('.verify-ok')!.addEventListener('click', async () => {
+      const res = await sendMessage<{ valid: boolean }>({ type: 'verifyMaster', masterPassword: input.value })
+      if (res.ok && res.data.valid) return done(true)
+      input.value = ''
+      input.placeholder = 'Wrong password — try again'
+      input.focus()
+    })
+    row.querySelector<HTMLButtonElement>('.verify-cancel')!.addEventListener('click', () => done(false))
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') row.querySelector<HTMLButtonElement>('.verify-ok')!.click()
+      if (ev.key === 'Escape') done(false)
+    })
+    host.appendChild(row)
+    input.focus()
+  })
 }
 
 async function copySecret(value: string): Promise<void> {

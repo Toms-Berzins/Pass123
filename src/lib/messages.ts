@@ -6,6 +6,9 @@ export type Request =
   | { type: 'status' }
   | { type: 'create'; masterPassword: string }
   | { type: 'unlock'; masterPassword: string }
+  // Re-verify the master password without changing lock state — gates revealing a
+  // saved password in the UI (shoulder-surf / unattended-popup protection).
+  | { type: 'verifyMaster'; masterPassword: string }
   | { type: 'lock' }
   // Recovery phrase (v0.3): generate/replace the BIP39 phrase, and reset the master
   // password using either the old password or the recovery phrase as `currentSecret`.

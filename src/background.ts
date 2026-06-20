@@ -156,6 +156,18 @@ async function handle(req: Request, tabId?: number): Promise<unknown> {
       armAutoLock()
       return { unlocked: true }
     }
+    case 'verifyMaster': {
+      // Confirm the master password against the existing wraps without disturbing
+      // the session. Used to gate revealing a saved password in the UI.
+      if (!sessionKey) throw new Error('Vault is locked')
+      try {
+        await unlockVault(req.masterPassword) // throws on wrong password
+        armAutoLock()
+        return { valid: true }
+      } catch {
+        return { valid: false }
+      }
+    }
     case 'lock': {
       lock()
       return { unlocked: false }
