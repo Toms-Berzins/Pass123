@@ -13,6 +13,15 @@ export default defineManifest({
   version: `${major}.${minor}.${patch}.${label}`,
   version_name: pkg.version,
 
+  // Public key (the public half of the local packing key, dist.pem) — pins a STABLE
+  // extension id across every load: unpacked dev build and packed .crx both resolve to
+  // chrome-extension://lneddopfdbfkcpnomchigacekmmpdeia/. This keeps the extension
+  // origin constant, which the WebAuthn/biometric flow needs (RP id = extension host)
+  // and makes autofill/iframe testing reproducible. Public, safe to commit (the .pem
+  // private key is gitignored and never committed). Revisit at Chrome Web Store publish:
+  // the Store may assign a different id, in which case swap in the CWS-provided key.
+  key: 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuD+dSxGd3A5kruA6KC0Ry/qRZfLfCsIBmcJa5trqYYY/oSik8fN9igslBzCYc5csUnQuFVK7P6epP4QnCk8EWTxsQHuayF5AtjQXhX+lGmMXjqKxFv1DaR+lEbSSZpfms6CZCuoXnV1C1OXzQF9UgoJvBUjZWHoOKvkbeMttw7mLlRDwtsbJTe8GO1flI2VXCwrZPwzRpLs437uTHkRkUPbdK01CDHZmPwfFot7IDqeiOLdyDC23XbFMLBa+f9hvXY7P0j8OxUq1DadZfYsUjfYGOJKkP8csgyIFLYitezWyg83DtxsaLBHfFWJQ2HA7bRd5WhrOenBK28cFGNWrfwIDAQAB',
+
   // Minimal permission set — local storage + on-demand injection into the active tab only.
   permissions: ['storage', 'activeTab', 'scripting', 'alarms', 'clipboardWrite'],
 

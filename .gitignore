@@ -4,6 +4,10 @@ node_modules/
 # Build output
 dist/
 *.zip
+*.crx
+
+# Packed-extension private signing key — NEVER commit (signs extension updates)
+*.pem
 
 # Vite / TS caches
 .vite/
