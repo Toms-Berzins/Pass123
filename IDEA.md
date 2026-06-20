@@ -122,9 +122,23 @@ lib/
   - **Popup payoff** ✅. The vault list now shows a "For this site" section (ranked current-tab matches) above all passwords.
   - Remaining: resilience to Chrome-behavior changes; broaden the real-site regression table; cross-*document* multi-step (username page → password page on a full navigation) still relies on per-step pages each carrying the username.
 
-- **Signature differentiator (design-later): per-secret emergency access.** Every manager dumps the *whole* vault to a trusted contact; the gap is sharing *one secret at a time on a per-recipient timer*. Needs a delivery channel that doesn't betray the no-server promise (user-mediated handoff, or an optional self-hosted relay) — design before committing.
+- **v0.6 — Launch-readiness (turn the code into a shipped product).** The roadmap so far is all engineering; nothing reaches a user until this lands. No new vault surface — it's the work that lets us *publish*. Grounded in `docs/business/` (90-day plan, Days 0–30).
+  - **Crypto & migration hardening.** Heavy test pass on the v1→v2 key-wrapping migration and every `keyWraps[]` path (master / recovery / biometric) — vault-loss is existential risk #1. Add fuzz/property tests around `unlockVault` wrap-trial order and a non-destructive migration guarantee (never write a re-wrap until the new wrap verifies).
+  - **Onboarding & recovery-nudge polish.** First-run flow must make BIP39 backup + emergency-kit unmissable (the inverted-recovery risk: no account = no backdoor). Periodic "have you saved your recovery phrase?" nudge.
+  - **Store shipping kit.** Privacy policy (state the honest threat model verbatim), Chrome Web Store listing + screenshots, minimal landing page, GitHub Sponsors + single non-nag Support link. Chrome Web Store is the **only** committed v1 surface; Firefox/AMO is gated on real MV3 compat, not a free port.
+  - **Autofill real-site burn-in.** Verify the v0.5 moat against the top ~50 sites before launch; file regressions into `urlmatch.test.ts`.
 
-- **Watch-list (don't commit yet):** passkey-first storage (the #1 2026 buyer priority, but local-only passkey storage is technically thorny and we'd be late); optional E2E sync; breach checks (HIBP k-anonymity).
+- **v0.7 — Pass123 Pro (the convenience layer that funds the project).** Free core stays free forever and source-available; safety features (encryption, BIP39 recovery, autofill, TOTP) are **never** gated. Pro = a **$19 one-time** unlock for convenience/no-server features: multiple vaults, themes, word-list packs, bulk ops, custom auto-lock intervals, early access, supporter badge. Soft, honor-based license (Chrome retired in-app payments → Merchant-of-Record checkout, Lemon Squeezy default). See `docs/business/MONETIZATION.md`.
+
+- **v0.8 — Per-secret emergency access (the signature differentiator).** Every manager dumps the *whole* vault to a trusted contact; the gap is sharing *one secret at a time, per-recipient, on a timer*. **Committed scope is the no-server, user-mediated capsule** — export a single secret as a time-boxed, separately-encrypted capsule (its own passphrase, expiry baked in, revocable by not sharing the key) that the user hands off through any channel they already trust. This needs **no** server, so it ships here ahead of the watch-list and doesn't wait on Sync. The optional self-hosted/E2E **relay** delivery (automatic timer-based release) is a later enhancement parked in the watch-list, gated on Sync existing. This is the feature no competitor ships; it's the reason to choose Pass123 beyond subtraction.
+
+- **v0.9+ — Watch-list (deferred; commit only on demand/retention signal).** Each is a real bus-factor/scope risk for a solo maintainer — pull in one at a time, never speculatively.
+  - **Optional E2E Sync** — zero-knowledge relay, **$2.49/mo or $24/yr**, the *only* justified server. The biggest burnout accelerant; keep opt-in and deferred until the core proves retention. If Sync ever threatens the core, pause Sync, not the extension.
+  - **Passkey-first storage** — the #1 2026 buyer priority, but local-only passkey storage is technically thorny and we'd be late. Watch the spec; don't lead with it.
+  - **Breach checks** — HIBP k-anonymity (range query, no full hash leaves the device) — the one cloud call compatible with "nothing to breach."
+  - **Relay delivery for emergency access** — automatic timer-based release of a v0.8 capsule via the self-hosted/E2E relay. Only meaningful once Sync exists; the user-mediated capsule (v0.8) already covers the no-server case.
+
+- **v1.0 — Definition of done.** Published on the Chrome Web Store; v1→v2 migration proven safe under test; recovery (phrase + emergency kit) verified end-to-end; autofill green on the top-50 real-site table; Pro live. 1.0 is *shipped + recoverable + autofills the hard forms* — not feature-maximal.
 
 > Honest caveat (unchanged): a local manager protects against *casual access to stored data*, not a compromised OS or keylogger. Keep this in marketing — the credibility is the point.
 
