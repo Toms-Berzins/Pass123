@@ -42,6 +42,87 @@ describe('registrableDomain', () => {
   })
 })
 
+describe('registrableDomain — top-site login-host burn-in (2026-06-21)', () => {
+  // Real login / SSO / account hostnames from the top ~50 sites, each → its
+  // expected registrable domain. This pins autofill matching against the sites
+  // users actually hit. When a real site mis-maps, add it here first.
+  const topSites: Array<[string, string]> = [
+    // Big global accounts
+    ['login.yahoo.com', 'yahoo.com'],
+    ['www.linkedin.com', 'linkedin.com'],
+    ['idmsa.apple.com', 'apple.com'],
+    ['appleid.apple.com', 'apple.com'],
+    ['login.salesforce.com', 'salesforce.com'],
+    ['account.adobe.com', 'adobe.com'],
+    ['auth.services.adobe.com', 'adobe.com'],
+    ['auth.uber.com', 'uber.com'],
+    ['account.booking.com', 'booking.com'],
+    ['www.airbnb.com', 'airbnb.com'],
+    ['www.paypal.com', 'paypal.com'],
+    ['www.dropbox.com', 'dropbox.com'],
+    ['www.notion.so', 'notion.so'],
+    ['www.figma.com', 'figma.com'],
+    ['discord.com', 'discord.com'],
+    ['x.com', 'x.com'],
+    ['mail.proton.me', 'proton.me'],
+    // Banking
+    ['secure05c.chase.com', 'chase.com'],
+    ['connect.secure.wellsfargo.com', 'wellsfargo.com'],
+    ['online.citi.com', 'citi.com'],
+    // Workspace / SSO providers (sibling subdomains → same site)
+    ['app.slack.com', 'slack.com'],
+    ['myworkspace.slack.com', 'slack.com'],
+    ['us02web.zoom.us', 'zoom.us'],
+    ['login.okta.com', 'okta.com'],
+    ['myorg.okta.com', 'okta.com'],
+    ['mytenant.auth0.com', 'auth0.com'],
+    ['dash.cloudflare.com', 'cloudflare.com'],
+    // Gaming / media
+    ['accounts.nintendo.com', 'nintendo.com'],
+    ['store.steampowered.com', 'steampowered.com'],
+    ['steamcommunity.com', 'steamcommunity.com'],
+    ['www.epicgames.com', 'epicgames.com'],
+    // International + multi-part public suffixes
+    ['amazon.co.uk', 'amazon.co.uk'],
+    ['www.amazon.co.jp', 'amazon.co.jp'],
+    ['login.yahoo.co.jp', 'yahoo.co.jp'],
+    ['www.rakuten.co.jp', 'rakuten.co.jp'],
+    ['account.gov.uk', 'account.gov.uk'],
+    ['www.hsbc.co.uk', 'hsbc.co.uk'],
+    ['nid.naver.com', 'naver.com'],
+    ['passport.yandex.ru', 'yandex.ru'],
+    ['login.taobao.com', 'taobao.com'],
+    ['www.mercadolibre.com.ar', 'mercadolibre.com.ar'],
+    // Multi-tenant platform suffixes — each subdomain is a DIFFERENT account, so
+    // it must be its own registrable domain (else one tenant's login leaks onto
+    // another's). These fail the bare last-two rule until PLATFORM_SUFFIXES covers them.
+    ['mystore.myshopify.com', 'mystore.myshopify.com'],
+    ['myapp.herokuapp.com', 'myapp.herokuapp.com'],
+    ['myproject.vercel.app', 'myproject.vercel.app'],
+    ['mysite.netlify.app', 'mysite.netlify.app'],
+    ['myapp.web.app', 'myapp.web.app'],
+    ['myapp.firebaseapp.com', 'myapp.firebaseapp.com'],
+    ['myapp.azurewebsites.net', 'myapp.azurewebsites.net'],
+    ['site.pages.dev', 'site.pages.dev'],
+    ['username.github.io', 'username.github.io'],
+  ]
+  it.each(topSites)('%s → %s', (input, expected) => {
+    expect(registrableDomain(input)).toBe(expected)
+  })
+
+  it('does not leak credentials across tenants on shared platforms', () => {
+    expect(sameSite('store-a.myshopify.com', 'store-b.myshopify.com')).toBe(false)
+    expect(sameSite('app-a.herokuapp.com', 'app-b.herokuapp.com')).toBe(false)
+    expect(sameSite('proj-a.vercel.app', 'proj-b.vercel.app')).toBe(false)
+  })
+
+  it('still groups true sibling subdomains on real sites', () => {
+    expect(sameSite('app.slack.com', 'myworkspace.slack.com')).toBe(true)
+    expect(sameSite('idmsa.apple.com', 'appleid.apple.com')).toBe(true)
+    expect(sameSite('login.okta.com', 'myorg.okta.com')).toBe(true)
+  })
+})
+
 describe('canonicalHost', () => {
   it('lowercases and strips www, trailing dot, port', () => {
     expect(canonicalHost('WWW.Example.com')).toBe('example.com')

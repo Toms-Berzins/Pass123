@@ -47,6 +47,32 @@ const MULTI_PART_SUFFIXES = new Set([
   'co.il', 'co.jp', 'com.ru', 'org.es',
 ])
 
+/**
+ * Multi-tenant platform suffixes: hosting/SaaS domains where each subdomain is a
+ * *different tenant with its own credentials*. Treating these as a public suffix
+ * (so `a.myshopify.com` and `b.myshopify.com` are distinct registrable domains)
+ * stops one tenant's saved login from surfacing on another's — a real autofill
+ * leak the bare last-two-labels rule would otherwise cause. A curated subset of
+ * the PSL's "private" section; extend as real-site regressions surface.
+ *
+ * Deliberately excluded: domains with a *single* central login shared across all
+ * subdomains (e.g. `wordpress.com`), and platforms whose suffix has three+ labels
+ * the last-two lookup can't express (e.g. `s3.amazonaws.com`).
+ */
+const PLATFORM_SUFFIXES = new Set([
+  'myshopify.com', // Shopify stores (per-store admin login)
+  'herokuapp.com', // Heroku apps
+  'appspot.com', // Google App Engine apps
+  'azurewebsites.net', // Azure App Service
+  'vercel.app', // Vercel deployments
+  'netlify.app', // Netlify sites
+  'onrender.com', // Render services
+  'web.app', 'firebaseapp.com', // Firebase Hosting
+  'pages.dev', 'workers.dev', // Cloudflare Pages / Workers
+  'github.io', 'gitlab.io', // GitHub / GitLab Pages
+  'blogspot.com', // Blogger
+])
+
 /** Lowercase a host, drop a trailing dot and any `:port`. Returns '' for falsy input. */
 function cleanHost(hostname: string): string {
   return (hostname || '').trim().toLowerCase().replace(/\.$/, '').replace(/:\d+$/, '')
@@ -69,7 +95,7 @@ export function registrableDomain(hostname: string): string {
   const parts = host.split('.')
   if (parts.length <= 2) return host
   const lastTwo = parts.slice(-2).join('.')
-  if (MULTI_PART_SUFFIXES.has(lastTwo)) return parts.slice(-3).join('.')
+  if (MULTI_PART_SUFFIXES.has(lastTwo) || PLATFORM_SUFFIXES.has(lastTwo)) return parts.slice(-3).join('.')
   return lastTwo
 }
 
