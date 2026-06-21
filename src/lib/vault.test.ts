@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   captureDecision,
+  confirmProvisionalEntry,
   createVault,
   loadData,
   matchEntries,
   newEntry,
   saveData,
+  suggestEmails,
   unlockVault,
   type VaultData,
 } from './vault'
@@ -138,5 +140,54 @@ describe('captureDecision', () => {
   it('does not cross registrable domains when deciding (wrong-account safety)', () => {
     // A login on an unrelated site must never resolve to this entry.
     expect(captureDecision(data, 'github.io', 'me', 'whatever').kind).toBe('save')
+  })
+})
+
+describe('suggestEmails', () => {
+  const mk = (username: string, updatedAt: number) => ({
+    ...newEntry({ title: 't', url: 'u.com', username, password: 'p', notes: '' }),
+    updatedAt,
+  })
+
+  it('returns email-looking usernames, ignoring non-emails', () => {
+    const data: VaultData = { entries: [mk('me@example.com', 1), mk('plainuser', 2), mk('', 3)] }
+    expect(suggestEmails(data)).toEqual(['me@example.com'])
+  })
+
+  it('dedupes case-insensitively and ranks by frequency then recency', () => {
+    const data: VaultData = {
+      entries: [
+        mk('Me@Example.com', 10),
+        mk('me@example.com', 20), // same as above (different case) -> count 2
+        mk('other@x.com', 30),
+        mk('other@x.com', 40), // count 2, but more recent than me@…
+        mk('rare@y.com', 50), // count 1
+      ],
+    }
+    // both have count 2; other@x.com is more recent (40 > 20) so it ranks first.
+    expect(suggestEmails(data)).toEqual(['other@x.com', 'Me@Example.com', 'rare@y.com'])
+  })
+
+  it('is empty for a vault with no email usernames', () => {
+    expect(suggestEmails({ entries: [mk('alice', 1)] })).toEqual([])
+  })
+})
+
+describe('confirmProvisionalEntry', () => {
+  it('clears the provisional flag and bumps updatedAt', () => {
+    const entry = newEntry({ title: 'x', url: 'x.com', username: 'me', password: 'pw', notes: '', provisional: true })
+    const confirmed = confirmProvisionalEntry(entry, 'me')
+    expect(confirmed.provisional).toBe(false)
+    expect(confirmed.updatedAt).toBeGreaterThanOrEqual(entry.updatedAt)
+  })
+
+  it('adopts a username typed after the proactive save', () => {
+    const entry = newEntry({ title: 'x', url: 'x.com', username: '', password: 'pw', notes: '', provisional: true })
+    expect(confirmProvisionalEntry(entry, '  new@user.com  ').username).toBe('new@user.com')
+  })
+
+  it('keeps the existing username when none is supplied', () => {
+    const entry = newEntry({ title: 'x', url: 'x.com', username: 'kept', password: 'pw', notes: '', provisional: true })
+    expect(confirmProvisionalEntry(entry, '').username).toBe('kept')
   })
 })

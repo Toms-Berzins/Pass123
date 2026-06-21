@@ -28,6 +28,14 @@ export type Request =
   | { type: 'update'; entry: VaultEntry }
   | { type: 'delete'; id: string }
   | { type: 'matchForHost'; hostname: string }
+  // Registration assist: generate a strong password for a sign-up form, and save it
+  // proactively (provisionally) the instant it's filled — before submit — so a
+  // generated new-account password can't be lost if the post-submit capture misfires.
+  | { type: 'generateForFill' }
+  | { type: 'provisionalSave'; hostname: string; username: string; password: string }
+  // Emails the user already uses (derived from existing entries) to suggest on a
+  // sign-up form — no new PII is stored; it never leaves the encrypted vault.
+  | { type: 'suggestEmails' }
   // Cross-document multi-step login: the username typed on one full-navigation page
   // is remembered in the worker (keyed by registrable domain, TTL'd) so the
   // password-only page that follows can be captured with the right account.

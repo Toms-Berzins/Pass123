@@ -37,6 +37,15 @@ export interface VaultEntry {
   notes: string
   /** Optional TOTP/2FA shared secret (base32). Rides the same AES-GCM envelope. */
   totp?: string
+  /**
+   * Set when this entry was saved proactively as we generated+filled a password on
+   * a sign-up form, *before* the form was submitted. It guards against the
+   * category's #1 complaint — a generated password lost because the post-submit
+   * save never fired. Cleared once a submit-capture confirms the credential
+   * (`confirmProvisionalEntry`). A provisional entry is a real, usable entry; it is
+   * never auto-deleted (deleting it would re-create the exact data-loss it prevents).
+   */
+  provisional?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -221,6 +230,45 @@ export function newEntry(partial: Omit<VaultEntry, 'id' | 'createdAt' | 'updated
  */
 export function matchEntries(data: VaultData, hostname: string): VaultEntry[] {
   return rankMatches(data.entries, hostname)
+}
+
+/**
+ * Email addresses the user already uses, derived from existing entries' usernames —
+ * so sign-up forms can suggest an email WITHOUT us collecting or storing any new PII
+ * (it never leaves the encrypted vault). Deduped case-insensitively, ranked by how
+ * often the email appears then by recency. Pure, so it's unit-testable.
+ */
+export function suggestEmails(data: VaultData): string[] {
+  const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  const seen = new Map<string, { email: string; count: number; recent: number }>()
+  for (const e of data.entries) {
+    const u = e.username.trim()
+    if (!EMAIL.test(u)) continue
+    const key = u.toLowerCase()
+    const cur = seen.get(key)
+    if (cur) {
+      cur.count++
+      cur.recent = Math.max(cur.recent, e.updatedAt)
+    } else {
+      seen.set(key, { email: u, count: 1, recent: e.updatedAt })
+    }
+  }
+  return [...seen.values()].sort((a, b) => b.count - a.count || b.recent - a.recent).map((x) => x.email)
+}
+
+/**
+ * Confirm a provisionally-saved sign-up entry: clear the provisional flag and adopt
+ * a username typed after the proactive save (e.g. the user filled the username field
+ * only after taking the generated password). Pure so it's unit-testable; the
+ * caller persists the result.
+ */
+export function confirmProvisionalEntry(entry: VaultEntry, username: string): VaultEntry {
+  return {
+    ...entry,
+    username: username.trim() || entry.username,
+    provisional: false,
+    updatedAt: Date.now(),
+  }
 }
 
 export type CaptureAction =

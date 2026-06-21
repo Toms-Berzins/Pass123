@@ -11,6 +11,7 @@ import {
   addBiometricWrap,
   captureDecision,
   changeMasterPassword,
+  confirmProvisionalEntry,
   createVault,
   getBiometricCredentialId,
   hasRecoveryPhrase,
@@ -20,12 +21,14 @@ import {
   removeBiometricWrap,
   saveData,
   setupRecoveryPhrase,
+  suggestEmails,
   unlockVault,
   unlockWithBiometric,
   type VaultData,
   type VaultEntry,
 } from './lib/vault'
 import { decryptImport, encryptExport, mergeEntries } from './lib/backup'
+import { DEFAULT_OPTIONS, generatePassword } from './lib/generator'
 import { registrableDomain } from './lib/urlmatch'
 import { fromBase64 } from './lib/crypto'
 import { clearVault, vaultExists } from './lib/storage'
@@ -80,6 +83,11 @@ const pending = new Map<string, PendingCapture>()
 // is not a secret like the password, but we still hold it only while unlocked.
 const rememberedUsernames = new Map<string, { username: string; ts: number }>()
 
+// Sign-up forms: the id of the entry we provisionally saved when we generated+filled
+// a password in a tab, so a later submit-capture in that tab CONFIRMS it (and adopts
+// a then-typed username) instead of creating a duplicate. Memory-only, cleared on lock.
+const provisionalByTab = new Map<number, string>()
+
 /** Registrable-domain key for the pending map, with a hostname fallback. */
 function pendingKey(hostname: string): string {
   return registrableDomain(hostname) || hostname
@@ -89,6 +97,7 @@ function lock(): void {
   sessionKey = null
   pending.clear() // captured plaintext must not outlive the unlocked session
   rememberedUsernames.clear()
+  provisionalByTab.clear()
   chrome.alarms.clear(AUTO_LOCK_ALARM)
 }
 
@@ -99,6 +108,9 @@ function armAutoLock(): void {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === AUTO_LOCK_ALARM) lock()
 })
+
+// Drop a tab's provisional-entry pointer when the tab closes (the entry itself stays).
+chrome.tabs.onRemoved.addListener((tabId) => provisionalByTab.delete(tabId))
 
 /**
  * Find the pending capture a page should offer to save. First by registrable
@@ -226,6 +238,37 @@ async function handle(req: Request, tabId?: number): Promise<unknown> {
       armAutoLock()
       return matchEntries(data, req.hostname)
     }
+    case 'generateForFill': {
+      // Pure RNG — no vault access needed, so it works regardless of lock state.
+      return { password: generatePassword(DEFAULT_OPTIONS) }
+    }
+    case 'suggestEmails': {
+      // Derived from existing entries; empty while locked (we won't decrypt to read).
+      if (!sessionKey) return { emails: [] }
+      const { data } = await requireData()
+      armAutoLock()
+      return { emails: suggestEmails(data) }
+    }
+    case 'provisionalSave': {
+      // Proactively store the just-generated sign-up password as a provisional entry,
+      // before the form is submitted. Needs an unlocked vault to encrypt; if locked we
+      // can't save (the value still sits in the page form, same as capture-on-submit).
+      if (!sessionKey) return { saved: false }
+      const { key, data } = await requireData()
+      const entry = newEntry({
+        title: req.hostname,
+        url: req.hostname,
+        username: req.username,
+        password: req.password,
+        notes: '',
+        provisional: true,
+      })
+      data.entries.push(entry)
+      await saveData(key, data)
+      if (tabId !== undefined) provisionalByTab.set(tabId, entry.id)
+      armAutoLock()
+      return { saved: true, id: entry.id }
+    }
     case 'rememberUsername': {
       // Only hold this while unlocked (capture needs an unlocked vault anyway).
       if (!sessionKey || !req.username) return { ok: false }
@@ -244,6 +287,21 @@ async function handle(req: Request, tabId?: number): Promise<unknown> {
         if (remembered && Date.now() - remembered.ts <= PENDING_TTL_MS) username = remembered.username
       }
       const data = await loadData(sessionKey)
+      // Reconcile a proactive sign-up save: if this tab has a provisional entry with
+      // the same password, this submit confirms it (adopting a now-typed username)
+      // rather than offering a duplicate. The credential was already safely stored.
+      const provId = tabId !== undefined ? provisionalByTab.get(tabId) : undefined
+      if (provId) {
+        const idx = data.entries.findIndex((e) => e.id === provId)
+        if (idx !== -1 && data.entries[idx].password === req.password) {
+          data.entries[idx] = confirmProvisionalEntry(data.entries[idx], username)
+          await saveData(sessionKey, data)
+          provisionalByTab.delete(tabId!)
+          pending.delete(pendingKey(req.hostname))
+          armAutoLock()
+          return { stored: false }
+        }
+      }
       const decision = captureDecision(data, req.hostname, username, req.password)
       const key = pendingKey(req.hostname)
       if (decision.kind === 'none') {

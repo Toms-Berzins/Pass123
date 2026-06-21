@@ -14,7 +14,16 @@ import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect, beforeEach } from 'vitest'
-import { findPasswordField, findUsernameField, isVisible, labelText } from './formdetect'
+import {
+  classifyForm,
+  findConfirmField,
+  findNewPasswordField,
+  findPasswordField,
+  findUsernameField,
+  isEmailLikeField,
+  isVisible,
+  labelText,
+} from './formdetect'
 
 const FORMS = join(dirname(fileURLToPath(import.meta.url)), '../../test/fixtures/forms')
 
@@ -190,5 +199,98 @@ describe('shadow DOM piercing (Spike 2)', () => {
     host.attachShadow({ mode: 'closed' }).innerHTML =
       '<input type="text" id="closed-user"><input type="password" id="closed-pass">'
     expect(detect(document)).toEqual({ user: null, pass: null })
+  })
+})
+
+describe('form classification — sign-up vs login vs change (registration assist)', () => {
+  it('standard login form classifies as login', () => {
+    expect(classifyForm(loadForm('standard'))).toBe('login')
+  })
+
+  it('sign-up form with autocomplete="new-password" classifies as signup', () => {
+    expect(classifyForm(loadForm('signup-autocomplete'))).toBe('signup')
+  })
+
+  it('two-password sign-up with no autocomplete classifies as signup (count rule)', () => {
+    expect(classifyForm(loadForm('signup-2pw'))).toBe('signup')
+  })
+
+  it('change-password form (current+new+confirm) classifies as change, not signup', () => {
+    expect(classifyForm(loadForm('change-3pw'))).toBe('change')
+  })
+
+  it('three-password change form with no autocomplete classifies as change (count rule)', () => {
+    expect(classifyForm(loadForm('change-3pw-noac'))).toBe('change')
+  })
+
+  it('single-password sign-up is rescued by keyword hints', () => {
+    expect(classifyForm(loadForm('signup-1pw-keyword'))).toBe('signup')
+  })
+
+  it('a password-less newsletter form is never a sign-up', () => {
+    expect(classifyForm(loadForm('newsletter-single'))).toBe('unknown')
+  })
+
+  it('a current-password field present alongside new-password is change, never signup', () => {
+    // The mixed-field decoy: having a current-password means we must NOT treat it as a
+    // fresh sign-up and offer to overwrite with a generated password.
+    expect(classifyForm(loadForm('email-currentpw'))).toBe('change')
+  })
+
+  it('a plain current-password-only login classifies as login', () => {
+    expect(classifyForm(loadForm('standard'))).toBe('login')
+  })
+})
+
+describe('new-password + confirm field detection', () => {
+  it('targets the new-password field on an annotated sign-up form', () => {
+    expect(findNewPasswordField(loadForm('signup-autocomplete'))?.id).toBe('su-pass')
+  })
+
+  it('skips the current-password field on a change form (fills the new one)', () => {
+    expect(findNewPasswordField(loadForm('change-3pw'))?.id).toBe('cp-new')
+  })
+
+  it('pairs the confirm field that follows the new-password field', () => {
+    const root = loadForm('signup-autocomplete')
+    const newPw = findNewPasswordField(root)!
+    expect(findConfirmField(root, newPw)?.id).toBe('su-confirm')
+  })
+
+  it('pairs the confirm field by position when there is no autocomplete', () => {
+    const root = loadForm('signup-2pw')
+    const newPw = findNewPasswordField(root)!
+    expect(newPw.id).toBe('su2-pass')
+    expect(findConfirmField(root, newPw)?.id).toBe('su2-confirm')
+  })
+
+  it('returns no confirm field for a single-password sign-up', () => {
+    const root = loadForm('signup-1pw-keyword')
+    const newPw = findNewPasswordField(root)!
+    expect(findConfirmField(root, newPw)).toBeNull()
+  })
+})
+
+describe('isEmailLikeField (email autofill safety)', () => {
+  const input = (html: string): HTMLInputElement => {
+    document.body.innerHTML = html
+    return document.querySelector('input')!
+  }
+
+  it('true for type=email', () => {
+    expect(isEmailLikeField(input('<input type="email">'))).toBe(true)
+  })
+
+  it('true for an email autocomplete token', () => {
+    expect(isEmailLikeField(input('<input type="text" autocomplete="email">'))).toBe(true)
+  })
+
+  it('true when name/id/placeholder mentions email', () => {
+    expect(isEmailLikeField(input('<input type="text" name="user_email">'))).toBe(true)
+    expect(isEmailLikeField(input('<input type="text" placeholder="Your e-mail">'))).toBe(true)
+  })
+
+  it('false for a plain username field (do not drop an email into it)', () => {
+    expect(isEmailLikeField(input('<input type="text" name="username" placeholder="Choose a username">'))).toBe(false)
   })
 })

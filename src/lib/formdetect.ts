@@ -147,6 +147,105 @@ export function findPasswordField(root: ParentNode, requireValue = false): HTMLI
   return fields.find(isCurrent) ?? fields[0] ?? null
 }
 
+/**
+ * True if a field is an *email* input (not just any username) — `type=email`, an
+ * `email` autocomplete token, or email wording in its attributes/label. Used to
+ * decide whether it's safe to drop a stored email address into the field.
+ */
+export function isEmailLikeField(el: HTMLInputElement): boolean {
+  if (el.type === 'email') return true
+  if (autocompleteTokens(el).includes('email')) return true
+  return /e-?mail/i.test(`${fieldText(el)} ${labelText(el)}`)
+}
+
+/** True if the field is explicitly tagged as a *new* password (sign-up / reset / change). */
+export function isNewPasswordField(el: HTMLInputElement): boolean {
+  return autocompleteTokens(el).includes('new-password')
+}
+
+/** True if the field is explicitly tagged as the *existing* password (sign-in / old password). */
+function isCurrentPasswordField(el: HTMLInputElement): boolean {
+  return autocompleteTokens(el).includes('current-password')
+}
+
+export type FormKind = 'login' | 'signup' | 'change' | 'unknown'
+
+// Secondary, i18n-fragile keyword signals — only used to break ties on a lone,
+// un-annotated password field, never to override an explicit autocomplete value.
+const SIGNUP_HINT = /sign[\s-]?up|regist|create[\s-]?(an? )?account|create your account|\bjoin\b|get started|new account/i
+const LOGIN_HINT = /sign[\s-]?in|log[\s-]?in|forgot|remember me/i
+
+/** Visible button / heading / legend text under a root — a weak hint at the form's purpose. */
+function formKeywords(root: ParentNode): string {
+  const els = deepQuerySelectorAll<HTMLElement>(root, 'button, input[type="submit"], [role="button"], h1, h2, legend')
+  return els.map((e) => (e as HTMLInputElement).value || e.textContent || '').join(' ').toLowerCase()
+}
+
+/**
+ * Classify a form/root as login / signup / change / unknown — a faithful port of
+ * the heuristics Chrome (`page_passwords_analyser.cc`) and Firefox
+ * (`isProbablyANewPasswordField`) ship:
+ *  1. `autocomplete` is authoritative: `new-password` ⇒ signup (or change if a
+ *     `current-password` is also present); `current-password` alone ⇒ login.
+ *  2. Otherwise fall back to the visible-password-field COUNT: 3+ ⇒ change
+ *     (current+new+confirm), 2 ⇒ signup (new+confirm), 1 ⇒ login/unknown.
+ *  3. A lone, un-annotated password field is the genuinely ambiguous case; only
+ *     then do keyword hints decide, defaulting to the safe `login` so we never
+ *     hijack a real sign-in field with a generated password.
+ */
+export function classifyForm(root: ParentNode): FormKind {
+  const pw = passwordFields(root)
+  if (pw.length === 0) return 'unknown'
+
+  const hasNew = pw.some(isNewPasswordField)
+  const hasCurrent = pw.some(isCurrentPasswordField)
+  if (hasNew) return hasCurrent ? 'change' : 'signup'
+  if (hasCurrent) return 'login'
+
+  // No explicit autocomplete — Chromium's count heuristic.
+  if (pw.length >= 3) return 'change'
+  if (pw.length === 2) return 'signup'
+
+  // Single un-annotated password field — the ambiguous case.
+  const kw = formKeywords(root)
+  const signup = SIGNUP_HINT.test(kw)
+  const login = LOGIN_HINT.test(kw)
+  if (signup && !login) return 'signup'
+  if (login && !signup) return 'login'
+  return findUsernameField(root, pw[0]) ? 'login' : 'unknown'
+}
+
+/**
+ * The password field a generated password should go into:
+ * the explicit `new-password` field, else (by the count rule) the first of the
+ * last-two password fields — i.e. skip a leading current-password on a change form.
+ */
+export function findNewPasswordField(root: ParentNode): HTMLInputElement | null {
+  const pw = passwordFields(root)
+  if (pw.length === 0) return null
+  const explicit = pw.find(isNewPasswordField)
+  if (explicit) return explicit
+  if (pw.length >= 3) return pw[pw.length - 2]
+  return pw[0]
+}
+
+/** Max password fields to look past when pairing a confirm field (Firefox: MAX_CONFIRM_PASSWORD_DISTANCE). */
+const MAX_CONFIRM_DISTANCE = 3
+
+/**
+ * The "confirm password" field paired with `newPw` (Firefox `findConfirmationField`):
+ * the next password field after it, within a small distance, never a current-password.
+ */
+export function findConfirmField(root: ParentNode, newPw: HTMLInputElement): HTMLInputElement | null {
+  const pw = passwordFields(root)
+  const idx = pw.indexOf(newPw)
+  if (idx === -1) return null
+  for (let i = idx + 1; i < pw.length && i <= idx + MAX_CONFIRM_DISTANCE; i++) {
+    if (!isCurrentPasswordField(pw[i])) return pw[i]
+  }
+  return null
+}
+
 export function findUsernameField(root: ParentNode, pw: HTMLInputElement | null): HTMLInputElement | null {
   const all = inputs(root)
   // 1. Explicit signal: autocomplete or an email field.
