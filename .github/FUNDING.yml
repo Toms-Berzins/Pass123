@@ -1,9 +1,8 @@
 # Pass123 is free and open source. Donations (revenue stream #1, per docs/business/BUSINESS.md §3)
 # fund a solo maintainer — there is no company, no investors, and no data sale behind this.
 #
-# TODO: replace the placeholder below with the real GitHub Sponsors username once the
-# Sponsors profile is live (GTM pre-launch checklist, Jun 20–25). Until then this file is inert.
-github: [your-github-username]
+# GitHub Sponsors users can support the maintainer from the repository's Sponsor button.
+github: [Toms-Berzins]
 
 # Optional one-off tip jars can be added here later (Ko-fi / Buy Me a Coffee), but keep it to a
 # single non-nag "Support Pass123" surface per the anti-upsell brand rule (BUSINESS.md §2).
