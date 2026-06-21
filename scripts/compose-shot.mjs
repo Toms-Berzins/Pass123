@@ -94,6 +94,11 @@ if (hasCaption) {
 await sharp(opts.bg)
   .resize(CANVAS_W, CANVAS_H, { fit: 'cover' })
   .composite(layers)
+  // Chrome Web Store requires 24-bit PNG with no alpha channel. Flatten the
+  // composited result onto an opaque background, then drop the alpha channel
+  // (flatten alone leaves a redundant alpha channel in this sharp version).
+  .flatten({ background: '#0c1611' })
+  .removeAlpha()
   .png()
   .toFile(outputPath)
 
