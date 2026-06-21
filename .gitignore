@@ -26,6 +26,9 @@ docs/
 # Landing page (kept out of the repo)
 landing/
 
+# Local screenshots (dev captures — kept out of the repo)
+screenshots/
+
 # Secrets / local env (API keys — NEVER commit)
 .env
 .env.*
