@@ -88,4 +88,6 @@ Unit tests live next to the code (`src/**/*.test.ts`) and cover the pure logic �
 
 ## License & support
 
-Source-available and free forever. If Pass123 saves you from a cloud you didn't trust, you can support a solo maintainer via the **Support** link in the extension settings or [GitHub Sponsors](.github/FUNDING.yml) — there's no company, no investors, and no data sale behind this project.
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md) — free to read, use, modify, and share for any **noncommercial** purpose (personal use, study, hobby projects, nonprofits, schools, and government all qualify). Commercial use requires a separate license from the maintainer.
+
+If Pass123 saves you from a cloud you didn't trust, you can support a solo maintainer via the **Support** link in the extension settings or [GitHub Sponsors](.github/FUNDING.yml) — there's no company, no investors, and no data sale behind this project.

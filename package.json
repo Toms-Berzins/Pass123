@@ -4,6 +4,7 @@
   "description": "Privacy-first Chrome (MV3) extension for local, encrypted password storage and generation.",
   "type": "module",
   "private": true,
+  "license": "PolyForm-Noncommercial-1.0.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
