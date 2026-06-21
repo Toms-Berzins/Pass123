@@ -23,6 +23,9 @@ vis-network/
 # Local docs (research, business plans, competitor notes — kept out of the repo)
 docs/
 
+# Landing page (kept out of the repo)
+landing/
+
 # Secrets / local env (API keys — NEVER commit)
 .env
 .env.*
