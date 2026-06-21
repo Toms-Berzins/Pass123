@@ -20,8 +20,12 @@ graphify-out/
 vis-network@*/
 vis-network/
 
-# Local docs (research, business plans, competitor notes — kept out of the repo)
-docs/
+# Local docs (research, business plans, competitor notes — kept out of the repo).
+# Ignore docs/ contents by default, but publish the files the public listing links to.
+docs/*
+!docs/PRIVACY.md
+!docs/PERMISSIONS.md
+!docs/security-model.svg
 
 # Landing page (kept out of the repo)
 landing/
