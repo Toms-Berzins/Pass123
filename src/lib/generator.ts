@@ -94,7 +94,7 @@ export const DEFAULT_PASSPHRASE: PassphraseOptions = {
 }
 
 // The recovery wordlist doubles as the passphrase wordlist: 2048 words = 11 bits each.
-const PASSPHRASE_WORDS = 2048
+const PASSPHRASE_WORDS = WORDLIST.length
 
 /** Generate a passphrase by drawing uniformly-random words from the wordlist. */
 export function generatePassphrase(opts: PassphraseOptions): string {
