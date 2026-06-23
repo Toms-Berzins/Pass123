@@ -67,7 +67,7 @@ export async function createVault(
 ): Promise<CryptoKey> {
   const vaultKeyBytes = generateVaultKey()
   const vaultKey = await importVaultKey(vaultKeyBytes)
-  const wrap = await buildWrap('password', vaultKeyBytes, masterPassword, iterations)
+  const { wrap } = await buildWrap('password', vaultKeyBytes, masterPassword, iterations)
   const payload = await encryptJSON(vaultKey, { entries: [] } as VaultData)
   await writeStoredVault({ version: 2, keyWraps: [wrap], payload })
   return vaultKey
@@ -106,7 +106,8 @@ export async function addKeyWrap(
   const stored = await requireStored()
   if (stored.version !== 2) throw new Error('Vault must be migrated before adding key wraps')
   const vaultKeyBytes = await unwrapVaultKeyBytes(stored, currentSecret)
-  const wrap = await buildWrap(method, vaultKeyBytes, newSecret, iterations)
+  const { wrap, wrappingKey } = await buildWrap(method, vaultKeyBytes, newSecret, iterations)
+  await verifyWrap(wrappingKey, wrap, vaultKeyBytes)
   await writeStoredVault({ ...stored, keyWraps: [...stored.keyWraps, wrap] })
 }
 
@@ -121,7 +122,8 @@ export async function setupRecoveryPhrase(currentSecret: string): Promise<string
   if (stored.version !== 2) throw new Error('Vault must be migrated before adding a recovery phrase')
   const vaultKeyBytes = await unwrapVaultKeyBytes(stored, currentSecret)
   const phrase = await generateMnemonic()
-  const wrap = await buildWrap('recovery', vaultKeyBytes, phrase, 0)
+  const { wrap, wrappingKey } = await buildWrap('recovery', vaultKeyBytes, phrase, 0)
+  await verifyWrap(wrappingKey, wrap, vaultKeyBytes)
   const keyWraps = [...stored.keyWraps.filter((w) => w.method !== 'recovery'), wrap]
   await writeStoredVault({ ...stored, keyWraps })
   return phrase
@@ -151,6 +153,8 @@ export async function addBiometricWrap(
   const salt = randomSalt()
   const wrappingKey = await deriveKeyFromEntropy(prfOutput, salt)
   const wrapped = await encryptBytes(wrappingKey, vaultKeyBytes)
+  const recovered = await decryptBytes(wrappingKey, wrapped)
+  if (!bytesEqual(recovered, vaultKeyBytes)) throw new Error('Biometric wrap verification failed — round-trip mismatch')
   const wrap: KeyWrap = { method: 'biometric', salt: toBase64(salt), iterations: 0, wrapped, credentialId }
   const keyWraps = [...stored.keyWraps.filter((w) => w.method !== 'biometric'), wrap]
   await writeStoredVault({ ...stored, keyWraps })
@@ -200,7 +204,8 @@ export async function changeMasterPassword(
   const stored = await requireStored()
   if (stored.version !== 2) throw new Error('Vault must be migrated before changing the password')
   const vaultKeyBytes = await unwrapVaultKeyBytes(stored, currentSecret)
-  const wrap = await buildWrap('password', vaultKeyBytes, newMasterPassword, iterations)
+  const { wrap, wrappingKey } = await buildWrap('password', vaultKeyBytes, newMasterPassword, iterations)
+  await verifyWrap(wrappingKey, wrap, vaultKeyBytes)
   const keyWraps = [...stored.keyWraps.filter((w) => w.method !== 'password'), wrap]
   await writeStoredVault({ ...stored, keyWraps })
 }
@@ -301,17 +306,34 @@ export function captureDecision(
  * Wrap raw vault-key bytes under a key derived from `secret`, tagged `method`.
  * Password/biometric secrets go through PBKDF2; a recovery phrase is decoded to
  * its BIP39 entropy and stretched with HKDF (`iterations` is unused for recovery).
+ * Returns both the wrap and the wrapping key so callers can verify without re-deriving.
  */
 async function buildWrap(
   method: KeyWrap['method'],
   vaultKeyBytes: Uint8Array,
   secret: string,
   iterations: number,
-): Promise<KeyWrap> {
+): Promise<{ wrap: KeyWrap; wrappingKey: CryptoKey }> {
   const salt = randomSalt()
   const wrappingKey = await deriveWrappingKey(method, secret, salt, iterations)
   const wrapped = await encryptBytes(wrappingKey, vaultKeyBytes)
-  return { method, salt: toBase64(salt), iterations: method === 'recovery' ? 0 : iterations, wrapped }
+  const wrap: KeyWrap = { method, salt: toBase64(salt), iterations: method === 'recovery' ? 0 : iterations, wrapped }
+  return { wrap, wrappingKey }
+}
+
+/**
+ * Verify a just-built wrap is correct before committing it to storage. Decrypts
+ * `wrap.wrapped` using the already-derived `wrappingKey` and confirms the result
+ * matches `expected`. Throws if the round-trip fails — the wrap must never be
+ * written to storage in that case.
+ */
+async function verifyWrap(wrappingKey: CryptoKey, wrap: KeyWrap, expected: Uint8Array): Promise<void> {
+  const recovered = await decryptBytes(wrappingKey, wrap.wrapped)
+  if (!bytesEqual(recovered, expected)) throw new Error('Key wrap verification failed — round-trip mismatch')
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i])
 }
 
 /** Derive the wrapping key for a method: HKDF over BIP39 entropy for recovery, else PBKDF2. */
@@ -356,7 +378,8 @@ async function migrateAndUnlock(
 
   const vaultKeyBytes = generateVaultKey()
   const vaultKey = await importVaultKey(vaultKeyBytes)
-  const wrap = await buildWrap('password', vaultKeyBytes, masterPassword, stored.iterations)
+  const { wrap, wrappingKey } = await buildWrap('password', vaultKeyBytes, masterPassword, stored.iterations)
+  await verifyWrap(wrappingKey, wrap, vaultKeyBytes)
   const payload = await encryptJSON(vaultKey, data)
   await writeStoredVault({ version: 2, keyWraps: [wrap], payload })
   return { key: vaultKey, data }
