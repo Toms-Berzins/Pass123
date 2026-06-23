@@ -36,6 +36,9 @@ let genMode: 'password' | 'passphrase' = 'password'
 let lastGenerated = ''
 let settingsCache: Settings = { ...DEFAULT_SETTINGS }
 
+const NUDGE_KEY = 'pass123.nudge_dismissed_at'
+const NUDGE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000
+
 /** Passphrase separator options, rendered as the square chip picker. */
 const SEPARATORS: { value: string; glyph: string; label: string }[] = [
   { value: '-', glyph: '-', label: 'Hyphen' },
@@ -85,6 +88,19 @@ lockBtn.addEventListener('click', async () => {
   void route()
 })
 
+/**
+ * True if the unlocked vault has no recovery phrase AND the user hasn't dismissed
+ * the nudge within the last 7 days. Checked once per popup open (in route()), not
+ * on every tab switch.
+ */
+async function shouldShowRecoveryNudge(): Promise<boolean> {
+  const res = await sendMessage<{ hasRecovery: boolean }>({ type: 'hasRecovery' })
+  if (!res.ok || res.data.hasRecovery) return false
+  const stored = await chrome.storage.local.get(NUDGE_KEY)
+  const dismissedAt = stored[NUDGE_KEY] as number | undefined
+  return !dismissedAt || Date.now() - dismissedAt > NUDGE_INTERVAL_MS
+}
+
 /** Decide which view to show based on whether a vault exists and is unlocked. */
 async function route(): Promise<void> {
   const res = await sendMessage<StatusResponse>({ type: 'status' })
@@ -94,7 +110,8 @@ async function route(): Promise<void> {
   if (!exists) return renderSetup()
   if (!unlocked) return renderUnlock()
   settingsCache = await getSettings()
-  return renderMain(await defaultTab())
+  const showNudge = await shouldShowRecoveryNudge()
+  return renderMain(await defaultTab(), showNudge)
 }
 
 /**
@@ -323,8 +340,15 @@ function renderSetNewMaster(currentSecret: string): void {
 // ---------- Main (tabs: Generate / Vault / Settings) ----------
 type Tab = 'gen' | 'vault' | 'settings'
 
-function renderMain(tab: Tab = 'gen'): void {
+function renderMain(tab: Tab = 'gen', showNudge = false): void {
   app.innerHTML = `
+    ${showNudge ? `<div id="recovery-nudge" class="nudge-banner">
+      <p class="nudge-msg">No recovery phrase set — if you lose your master password, your vault cannot be recovered.</p>
+      <div class="nudge-row">
+        <button id="nudge-setup" class="nudge-cta">Set up recovery phrase →</button>
+        <button id="nudge-close" class="nudge-x" aria-label="Dismiss">✕</button>
+      </div>
+    </div>` : ''}
     <div class="tabs">
       <button data-tab="gen" class="${tab === 'gen' ? 'active' : ''}">Generate</button>
       <button data-tab="vault" class="${tab === 'vault' ? 'active' : ''}">Vault</button>
@@ -334,6 +358,13 @@ function renderMain(tab: Tab = 'gen'): void {
   `
   for (const b of app.querySelectorAll<HTMLButtonElement>('.tabs button')) {
     b.addEventListener('click', () => renderMain(b.dataset.tab as Tab))
+  }
+  if (showNudge) {
+    byId<HTMLButtonElement>('nudge-setup').addEventListener('click', promptForRecovery)
+    byId<HTMLButtonElement>('nudge-close').addEventListener('click', async () => {
+      await chrome.storage.local.set({ [NUDGE_KEY]: Date.now() })
+      byId<HTMLElement>('recovery-nudge').remove()
+    })
   }
   if (tab === 'gen') renderGenerator()
   else if (tab === 'vault') void renderVault()
@@ -837,6 +868,9 @@ function renderSettings(): void {
     </div>
 
     <hr style="border:none;border-top:1px solid var(--border-soft);margin:0" />
+    <p class="hint" style="text-align:center">If Pass123 saves you from a cloud you didn't trust, <button id="support-link" class="link" style="font-size:inherit;letter-spacing:0;text-transform:none">support the maintainer →</button></p>
+
+    <hr style="border:none;border-top:1px solid var(--border-soft);margin:0" />
     <p class="step" style="color:var(--danger)">Danger zone</p>
     <button id="del-vault" class="danger">Delete vault…</button>
     <p class="hint">Permanently erases all saved passwords. This cannot be undone.</p>
@@ -880,6 +914,9 @@ function renderSettings(): void {
 
   byId<HTMLButtonElement>('export-btn').addEventListener('click', renderExport)
   byId<HTMLButtonElement>('import-btn').addEventListener('click', renderImport)
+  byId<HTMLButtonElement>('support-link').addEventListener('click', () =>
+    void chrome.tabs.create({ url: 'https://github.com/sponsors/Toms-Berzins' }),
+  )
 
   // Two-step delete to avoid an accidental wipe.
   const del = byId<HTMLButtonElement>('del-vault')
