@@ -111,6 +111,20 @@ async function route(): Promise<void> {
   if (!unlocked) return renderUnlock()
   settingsCache = await getSettings()
   const showNudge = await shouldShowRecoveryNudge()
+  // Check if the icon click requested "add entry for this site" — jump straight there.
+  const intent = await chrome.storage.session.get('p123_addEntry')
+  const prefillHost = intent['p123_addEntry'] as string | undefined
+  if (prefillHost) {
+    await chrome.storage.session.remove('p123_addEntry')
+    // renderMain('vault') fires async renderVault() which would race with and overwrite
+    // renderEntryForm. Use the synchronous 'gen' path to build the shell instead, then
+    // manually activate the vault tab before showing the form.
+    renderMain('gen', showNudge)
+    app.querySelector<HTMLButtonElement>('[data-tab="gen"]')?.classList.remove('active')
+    app.querySelector<HTMLButtonElement>('[data-tab="vault"]')?.classList.add('active')
+    renderEntryForm(undefined, '', prefillHost)
+    return
+  }
   return renderMain(await defaultTab(), showNudge)
 }
 
@@ -517,7 +531,9 @@ function renderGenerator(): void {
   byId<HTMLButtonElement>('regenIcon').addEventListener('click', refresh)
   byId<HTMLButtonElement>('copy').addEventListener('click', doCopy)
   byId<HTMLButtonElement>('copyIcon').addEventListener('click', doCopy)
-  byId<HTMLButtonElement>('saveGen').addEventListener('click', () => renderEntryForm(undefined, lastGenerated))
+  byId<HTMLButtonElement>('saveGen').addEventListener('click', async () =>
+    renderEntryForm(undefined, lastGenerated, await activeTabHostname())
+  )
 
   drawControls()
   refresh()
@@ -541,7 +557,7 @@ async function renderVault(): Promise<void> {
     <div id="forSite"></div>
     <div class="list" id="list"></div>
   `
-  byId<HTMLButtonElement>('addBtn').addEventListener('click', () => renderEntryForm())
+  byId<HTMLButtonElement>('addBtn').addEventListener('click', () => renderEntryForm(undefined, '', host))
   const search = byId<HTMLInputElement>('search')
   const clearBtn = byId<HTMLButtonElement>('searchClear')
   const count = byId<HTMLParagraphElement>('count')
@@ -575,7 +591,7 @@ async function renderVault(): Promise<void> {
         const cta = document.createElement('button')
         cta.className = 'small'
         cta.textContent = '+ Add your first password'
-        cta.addEventListener('click', () => renderEntryForm())
+        cta.addEventListener('click', () => renderEntryForm(undefined, '', host))
         list.querySelector('.empty')!.appendChild(cta)
       } else {
         list.innerHTML = `<p class="empty">No matches.</p>`
@@ -743,13 +759,17 @@ function mountTotpRow(card: HTMLElement, secret: string): void {
   card.querySelector('[data-act="copyTotp"]')!.addEventListener('click', () => copySecret(current, 'Code copied'))
 }
 
-function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
+function renderEntryForm(existing?: VaultEntry, presetPassword = '', prefillUrl = ''): void {
   const view = byId<HTMLDivElement>('view')
   const e = existing
+  const urlValue = e?.url ?? prefillUrl
   view.innerHTML = `
-    <div><label>Title</label><input id="f-title" type="text" value="${attr(e?.title)}" /></div>
-    <div><label>URL</label><input id="f-url" type="text" placeholder="example.com" value="${attr(e?.url)}" /></div>
-    <div><label>Username</label><input id="f-user" type="text" value="${attr(e?.username)}" /></div>
+    <div><label>Title</label><input id="f-title" type="text" value="${attr(e?.title ?? prefillUrl)}" /></div>
+    <div><label>URL</label><input id="f-url" type="text" placeholder="example.com" value="${attr(urlValue)}" /></div>
+    <div><label>Username</label>
+      <input id="f-user" type="text" value="${attr(e?.username)}" autocomplete="off" list="f-user-list" />
+      <datalist id="f-user-list"></datalist>
+    </div>
     <div id="f-pass-block"><label>Password</label>
       <div class="row" id="f-pass-row">
         <input id="f-pass" type="${e?.password ? 'password' : 'text'}" value="${attr(e?.password ?? presetPassword)}" />
@@ -767,6 +787,22 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = ''): void {
       <button id="cancel" class="ghost">Cancel</button>
     </div>
   `
+  // Populate username datalist with all unique usernames/emails from the vault.
+  void sendMessage<VaultEntry[]>({ type: 'list' }).then((res) => {
+    if (!res.ok) return
+    const dl = document.getElementById('f-user-list')
+    if (!dl) return
+    const seen = new Set<string>()
+    for (const entry of res.data) {
+      const v = entry.username.trim()
+      if (!v || seen.has(v)) continue
+      seen.add(v)
+      const opt = document.createElement('option')
+      opt.value = v
+      dl.appendChild(opt)
+    }
+  })
+
   const passEl = byId<HTMLInputElement>('f-pass')
   const revealBtn = byId<HTMLButtonElement>('f-reveal')
   // A saved password starts protected: revealing it requires re-verifying the master

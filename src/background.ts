@@ -6,7 +6,7 @@
  * the popup re-checks status and prompts for the master password when needed.
  */
 
-import type { PendingInfo, Request, Response, StatusResponse } from './lib/messages'
+import type { EntryMeta, PendingInfo, Request, Response, StatusResponse } from './lib/messages'
 import {
   addBiometricWrap,
   captureDecision,
@@ -238,6 +238,27 @@ async function handle(req: Request, tabId?: number): Promise<unknown> {
       armAutoLock()
       return matchEntries(data, req.hostname)
     }
+    case 'matchesForHost': {
+      // Metadata only — no passwords exposed to content scripts.
+      // Returns locked:true (soft signal, not an error) so the caller can
+      // distinguish "vault is locked" from "no matches for this host".
+      if (!sessionKey) return { entries: [] as EntryMeta[], locked: true }
+      const { data } = await requireData()
+      armAutoLock()
+      const matches = matchEntries(data, req.hostname)
+      return {
+        entries: matches.map(({ id, title, url, username }): EntryMeta => ({ id, title, url, username })),
+        locked: false,
+      }
+    }
+    case 'fillEntry': {
+      // Full credentials for one entry by id. Vault must be unlocked.
+      const { data } = await requireData()
+      armAutoLock()
+      const entry = data.entries.find((e) => e.id === req.id)
+      if (!entry) throw new Error('Entry not found')
+      return { username: entry.username, password: entry.password }
+    }
     case 'generateForFill': {
       // Pure RNG — no vault access needed, so it works regardless of lock state.
       return { password: generatePassword(DEFAULT_OPTIONS) }
@@ -396,6 +417,18 @@ async function handle(req: Request, tabId?: number): Promise<unknown> {
       await clearVault()
       lock()
       return { deleted: true }
+    }
+    case 'openPopup': {
+      if (req.prefillHostname) {
+        await chrome.storage.session.set({ p123_addEntry: req.prefillHostname })
+      }
+      try {
+        await chrome.action.openPopup()
+      } catch {
+        // chrome.action.openPopup() requires Chrome 127+ and a user gesture chain;
+        // silently ignore on older Chrome — user can still click the toolbar icon.
+      }
+      return { ok: true }
     }
   }
 }

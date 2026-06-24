@@ -11,7 +11,15 @@
  * Credentials only leave this script after the user explicitly clicks Save/Update.
  */
 
-import { sendMessage, type PendingInfo } from './lib/messages'
+// Never run in a sandboxed iframe — self.origin === null means the iframe has the
+// sandbox attribute or a CSP sandbox directive, which strips the origin. Filling
+// credentials there would expose them to attacker-controlled scripts (CVE class).
+if (self.origin === null) {
+  chrome.runtime.onMessage.addListener(() => false)
+  throw new Error('Pass123: sandboxed frame — autofill disabled')
+}
+
+import { sendMessage, type EntryMeta, type PendingInfo } from './lib/messages'
 import {
   classifyForm,
   findConfirmField,
@@ -26,6 +34,16 @@ import {
 // (so iframe'd login forms are handled), but the save/update banner renders only in
 // the top frame — never inside an embedded ad/widget iframe.
 const isTopFrame = window === window.top
+
+// ---------- inline icon state ----------
+const iconHosts = new WeakMap<HTMLInputElement, HTMLElement>()
+// Closed shadow DOM means shadowRoot is null from outside the closure — store btn directly.
+const iconButtons = new WeakMap<HTMLInputElement, HTMLElement>()
+const knownFields = new Set<HTMLInputElement>()
+const focusListened = new WeakSet<HTMLInputElement>()
+let pickerHost: HTMLElement | null = null
+let loginScanTimer = 0
+let rafId = 0
 
 // ---------- autofill helpers ----------
 function setValue(input: HTMLInputElement, value: string): void {
@@ -157,6 +175,8 @@ function hookSpaNavigation(): void {
   const fire = (): void => {
     if (findPasswordField(document, true)) void captureNow()
     else void rememberUsernameAcrossPages()
+    // Rescan for login fields after the SPA route renders the new form.
+    setTimeout(scheduleLoginScan, 0)
   }
   const wrap = (name: 'pushState' | 'replaceState'): void => {
     const orig = history[name].bind(history)
@@ -464,6 +484,217 @@ function escapeHtml(s: string): string {
   )
 }
 
+// ---------- inline icon + auto-fill on focus ----------
+
+const ICON_SVG = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2" y="6" width="10" height="7" rx="1.5" fill="#39ff6e"/>
+  <path d="M4.5 6V4.5a2.5 2.5 0 0 1 5 0V6" stroke="#39ff6e" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+</svg>`
+
+const ICON_CSS = `
+  :host { all: initial; }
+  button {
+    position: absolute;
+    width: 20px; height: 20px;
+    padding: 0; border: none; border-radius: 4px;
+    background: rgba(57,255,110,.12);
+    cursor: pointer; pointer-events: auto;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0.75; transition: opacity .12s ease, background .12s ease;
+  }
+  button:hover { opacity: 1; background: rgba(57,255,110,.28); }
+`
+
+const PICKER_CSS = `
+  :host { all: initial; }
+  .picker {
+    background: #17171f; border: 1px solid rgba(255,255,255,.12);
+    border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,.6);
+    overflow: hidden; min-width: 200px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  }
+  .entry {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 10px 14px; cursor: pointer;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    outline: none;
+  }
+  .entry:last-child { border-bottom: none; }
+  .entry:hover, .entry:focus { background: rgba(57,255,110,.08); }
+  .title { font-size: 12px; color: #f0f0f0; }
+  .user { font-size: 11px; color: rgba(240,240,240,.5); }
+`
+
+function startRafLoop(): void {
+  if (rafId) return
+  const tick = (): void => {
+    repositionAllIcons()
+    rafId = knownFields.size > 0 ? requestAnimationFrame(tick) : 0
+  }
+  rafId = requestAnimationFrame(tick)
+}
+
+function positionIcon(field: HTMLInputElement): void {
+  const host = iconHosts.get(field)
+  if (!host) return
+  const r = field.getBoundingClientRect()
+  if (r.width === 0 || r.height === 0) { host.style.display = 'none'; return }
+  host.style.display = ''
+  const btn = iconButtons.get(field)
+  if (!btn) return
+  // Position just outside the field's right edge so we never collide with native
+  // in-field icons (GitHub checkmarks, show/hide toggles, browser autofill chips, etc.)
+  // Clamp to viewport so it doesn't disappear off-screen on wide fields.
+  const left = Math.min(r.right + 4, window.innerWidth - 26)
+  btn.style.left = `${left}px`
+  btn.style.top = `${r.top + (r.height - 20) / 2}px`
+}
+
+function repositionAllIcons(): void {
+  knownFields.forEach((f) => positionIcon(f))
+}
+
+function ensureIcon(field: HTMLInputElement): void {
+  if (iconHosts.has(field)) return
+  const host = document.createElement('div')
+  // Random attribute so page JS can't target it by a stable name (Bitwarden pattern).
+  host.setAttribute(`data-p123-${Math.random().toString(36).slice(2)}`, '')
+  host.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;width:0;height:0;top:0;left:0'
+  const shadow = host.attachShadow({ mode: 'closed' })
+  shadow.innerHTML = `<style>${ICON_CSS}</style><button title="Fill with Pass123" aria-label="Fill with Pass123">${ICON_SVG}</button>`
+  const btn = shadow.querySelector('button')!
+  btn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation() })
+  btn.addEventListener('click', (e) => { e.stopPropagation(); void handleIconClick(field) })
+  ;(document.body ?? document.documentElement).appendChild(host)
+  iconHosts.set(field, host)
+  iconButtons.set(field, btn)
+  knownFields.add(field)
+  startRafLoop()
+}
+
+function attachFocusListener(field: HTMLInputElement): void {
+  if (focusListened.has(field)) return
+  focusListened.add(field)
+  field.addEventListener('focusin', (e) => { if (e.isTrusted) void handleFieldFocus(field) })
+}
+
+async function handleFieldFocus(field: HTMLInputElement): Promise<void> {
+  if (field.value.trim().length > 0) return
+  const res = await sendMessage<{ entries: EntryMeta[]; locked: boolean }>({
+    type: 'matchesForHost',
+    hostname: location.hostname,
+  })
+  if (!res.ok || res.data.locked || res.data.entries.length !== 1) return
+  await fillFromEntry(res.data.entries[0].id)
+}
+
+
+async function handleIconClick(field: HTMLInputElement): Promise<void> {
+  const res = await sendMessage<{ entries: EntryMeta[]; locked: boolean }>({
+    type: 'matchesForHost',
+    hostname: location.hostname,
+  })
+  // Service worker terminated (cold start) or vault not yet created → treat as locked.
+  if (!res.ok || res.data.locked) {
+    void sendMessage({ type: 'openPopup' })
+    return
+  }
+  if (res.data.entries.length === 0) {
+    void sendMessage({ type: 'openPopup', prefillHostname: location.hostname })
+    return
+  }
+  if (res.data.entries.length === 1) {
+    await fillFromEntry(res.data.entries[0].id)
+    return
+  }
+  const chosen = await showPicker(field, res.data.entries)
+  if (chosen) await fillFromEntry(chosen.id)
+}
+
+async function fillFromEntry(entryId: string): Promise<void> {
+  const res = await sendMessage<{ username: string; password: string }>({
+    type: 'fillEntry',
+    id: entryId,
+  })
+  if (!res.ok) return
+  const pw = findPasswordField(document)
+  const user = findUsernameField(document, pw)
+  if (user) setValue(user, res.data.username)
+  if (pw) setValue(pw, res.data.password)
+}
+
+function showPicker(field: HTMLInputElement, entries: EntryMeta[]): Promise<EntryMeta | null> {
+  return new Promise((resolve) => {
+    closePicker()
+    pickerHost = document.createElement('div')
+    const r = field.getBoundingClientRect()
+    pickerHost.style.cssText = `position:fixed;z-index:2147483647;left:${r.left}px;top:${r.bottom + 4}px;min-width:${r.width}px`
+    const shadow = pickerHost.attachShadow({ mode: 'closed' })
+    const items = entries.map((e, i) =>
+      `<div class="entry" role="option" tabindex="0" data-idx="${i}">
+        <span class="title">${escapeHtml(e.title || e.url || e.username)}</span>
+        <span class="user">${escapeHtml(e.username)}</span>
+      </div>`
+    ).join('')
+    shadow.innerHTML = `<style>${PICKER_CSS}</style><div class="picker" role="listbox">${items}</div>`
+    shadow.querySelectorAll<HTMLElement>('.entry').forEach((el, i) => {
+      el.addEventListener('mousedown', (e) => e.preventDefault())
+      el.addEventListener('click', () => { closePicker(); resolve(entries[i]) })
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); closePicker(); resolve(entries[i]) }
+        if (e.key === 'Escape') { closePicker(); resolve(null) }
+        if (e.key === 'ArrowDown') (el.nextElementSibling as HTMLElement)?.focus()
+        if (e.key === 'ArrowUp') (el.previousElementSibling as HTMLElement)?.focus()
+      })
+    })
+    const dismiss = (e: MouseEvent): void => {
+      if (!pickerHost?.contains(e.target as Node)) { closePicker(); resolve(null) }
+    }
+    document.addEventListener('mousedown', dismiss, { capture: true })
+    ;(pickerHost as any)._dismiss = dismiss
+    ;(document.body ?? document.documentElement).appendChild(pickerHost)
+    shadow.querySelector<HTMLElement>('.entry')?.focus()
+  })
+}
+
+function closePicker(): void {
+  if (!pickerHost) return
+  const d = (pickerHost as any)._dismiss
+  if (d) document.removeEventListener('mousedown', d, { capture: true })
+  pickerHost.remove()
+  pickerHost = null
+}
+
+function rescanLoginFields(): void {
+  const pw = findPasswordField(document)
+  const user = findUsernameField(document, pw)
+  const current = new Set<HTMLInputElement>()
+  if (pw) current.add(pw)
+  if (user) current.add(user)
+  // Remove stale icons
+  knownFields.forEach((f) => {
+    if (!current.has(f)) {
+      iconHosts.get(f)?.remove()
+      iconHosts.delete(f)
+      iconButtons.delete(f)
+      knownFields.delete(f)
+    }
+  })
+  current.forEach((f) => { ensureIcon(f); attachFocusListener(f) })
+}
+
+function scheduleLoginScan(): void {
+  clearTimeout(loginScanTimer)
+  loginScanTimer = setTimeout(rescanLoginFields, 400) as unknown as number
+}
+
+function detectAndInjectIcons(): void {
+  const pw = findPasswordField(document)
+  const user = findUsernameField(document, pw)
+  if (pw) { ensureIcon(pw); attachFocusListener(pw) }
+  if (user) { ensureIcon(user); attachFocusListener(user) }
+}
+
 // On page load (e.g. after a login navigated here), surface any pending capture.
 void maybeShowBanner()
 
@@ -475,3 +706,11 @@ if (isTopFrame) {
     subtree: true,
   })
 }
+
+// Watch for login fields in ALL frames (icon injection is not top-frame only).
+new MutationObserver(scheduleLoginScan).observe(document.documentElement, {
+  childList: true,
+  subtree: true,
+})
+
+detectAndInjectIcons()

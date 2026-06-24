@@ -46,6 +46,19 @@ export type Request =
   | { type: 'captureConfirm'; hostname: string }
   | { type: 'captureDismiss'; hostname: string }
   | { type: 'deleteVault' }
+  // Inline autofill icon: content script requests match metadata (no passwords) and
+  // then full credentials for one chosen entry.
+  | { type: 'matchesForHost'; hostname: string }
+  | { type: 'fillEntry'; id: string }
+  | { type: 'openPopup'; prefillHostname?: string }
+
+/** Entry metadata returned to content scripts — no password field. */
+export interface EntryMeta {
+  id: string
+  title: string
+  url: string
+  username: string
+}
 
 export interface StatusResponse {
   exists: boolean

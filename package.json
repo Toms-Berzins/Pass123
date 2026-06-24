@@ -13,10 +13,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "icons": "node scripts/gen-icons.mjs",
-    "zip": "node scripts/zip.mjs"
+    "zip": "node scripts/zip.mjs",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.7.0",
+    "@playwright/test": "^1.61.1",
     "@types/chrome": "^0.1.43",
     "happy-dom": "^20.10.6",
     "sharp": "^0.35.2",
