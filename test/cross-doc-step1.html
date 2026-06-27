@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>Step 1 – Username</title></head>
+<body>
+  <h2>Sign in</h2>
+  <!-- Non-standard id/name: "identifier" does NOT match USER_HINT (/user|email|login|account|phone|mobile|nick/i) -->
+  <!-- This is the exact field type the fix targets -->
+  <form action="cross-doc-step2.html" method="get">
+    <label for="identifier">Your identifier</label><br>
+    <input type="text" id="identifier" name="identifier" autocomplete="off" placeholder="Enter identifier"><br>
+    <button type="submit">Next</button>
+  </form>
+</body>
+</html>

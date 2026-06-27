@@ -82,9 +82,12 @@ let lastSignature = ''
 // written back to the page DOM, and it dies with the document on a full navigation.
 let rememberedUsername = ''
 
-function rememberUsername(): void {
+function rememberUsername(typed?: HTMLInputElement): void {
   const u = findUsernameField(document, null)
-  if (u && u.value.trim()) rememberedUsername = u.value.trim()
+  if (u && u.value.trim()) { rememberedUsername = u.value.trim(); return }
+  // Non-standard field on a username-only page: trust what the user just typed.
+  if (typed && typed.value.trim() && passwordFields(document).length === 0)
+    rememberedUsername = typed.value.trim()
 }
 
 /**
@@ -130,7 +133,7 @@ document.addEventListener(
   'input',
   (e) => {
     const t = e.target as HTMLInputElement | null
-    if (t?.tagName === 'INPUT' && t.type !== 'password') rememberUsername()
+    if (t?.tagName === 'INPUT' && t.type !== 'password') rememberUsername(t)
   },
   true,
 )
