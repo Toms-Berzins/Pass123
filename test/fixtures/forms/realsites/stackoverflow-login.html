@@ -1,0 +1,11 @@
+<!-- stackoverflow.com/users/login — email field + current-password.
+     Signup modal with new-password also present but must NOT be picked. -->
+<form id="signup-modal" style="display:none">
+  <input class="s-input" id="signup-modal-email" size="30" maxlength="100" name="email" autocomplete="off">
+  <input id="signup-modal-password" class="s-input" autocomplete="new-password" name="password" type="password">
+</form>
+<form id="login-form">
+  <input class="s-input" id="email" type="email" size="30" maxlength="100" name="email">
+  <input class="s-input" type="password" name="password" id="password" autocomplete="current-password">
+  <input type="submit" value="Log in">
+</form>

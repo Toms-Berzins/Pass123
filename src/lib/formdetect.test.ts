@@ -96,6 +96,45 @@ describe('real-site burn-in (Spike 4) — detection against captured markup', ()
   it('wikipedia Special:UserLogin — search-box decoy + multi-token autocomplete', () => {
     expect(detect(loadForm('realsites/wikipedia-login'))).toEqual({ user: 'wpName1', pass: 'wpPassword1' })
   })
+
+  it('stackoverflow.com/users/login — email field + current-password, signup modal hidden', () => {
+    expect(detect(loadForm('realsites/stackoverflow-login'))).toEqual({ user: 'email', pass: 'password' })
+  })
+
+  it('twitch.tv/login — SPA form, autocomplete=username wins', () => {
+    expect(detect(loadForm('realsites/twitch-login'))).toEqual({ user: 'login-username', pass: 'password-input' })
+  })
+})
+
+describe('hostile fields — section 6 of AUTOFILL_REGRESSION.md', () => {
+  it('OTP/2FA code field after login is not captured as username', () => {
+    // A page that shows a password + OTP field (but no username field).
+    // The OTP must not be mistaken for a username by the positional fallback.
+    document.body.innerHTML = `
+      <form>
+        <input type="password" id="pw">
+        <input type="text" id="otp" name="otp" placeholder="6-digit code" autocomplete="one-time-code">
+      </form>`
+    expect(detect(document)).toEqual({ user: null, pass: 'pw' })
+  })
+
+  it('2fa name variant is also rejected', () => {
+    document.body.innerHTML = `
+      <form>
+        <input type="text" id="code" name="2fa_code">
+        <input type="password" id="pw">
+      </form>`
+    expect(detect(document)).toEqual({ user: null, pass: 'pw' })
+  })
+
+  it('captcha field is not taken as username', () => {
+    document.body.innerHTML = `
+      <form>
+        <input type="text" id="cap" name="captcha_answer">
+        <input type="password" id="pw">
+      </form>`
+    expect(detect(document)).toEqual({ user: null, pass: 'pw' })
+  })
 })
 
 describe('autocomplete tokenization (Spike 4 finding)', () => {
