@@ -15,44 +15,67 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = resolve(__dirname, '..', 'public', 'icons')
 
-const ACCENT_A = [57, 255, 110] // #39ff6e (signal green)
-const ACCENT_B = [43, 212, 87] // #2bd457 (deeper green)
-const GLYPH = [9, 9, 15] // #09090f near-black keyhole
+// Dark glass background; signal-green key glyph.
+const BG_A = [9, 9, 15]       // #09090f near-black
+const BG_B = [19, 19, 30]     // #13131e dark glass
+const GLYPH = [57, 255, 110]  // #39ff6e signal green
 const SS = 4 // supersampling factor for smooth edges
 
 const lerp = (a, b, t) => a + (b - a) * t
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi)
 
+/**
+ * Returns true if (fx,fy) is inside the key glyph.
+ * Key: horizontal — ring bow on left, shaft right, 3 teeth (1:2:3 heights) downward.
+ */
+function isKey(fx, fy, N) {
+  const bowX = N * 0.27, bowY = N * 0.47
+  const bowOuter = N * 0.155, bowInner = N * 0.078
+
+  // Bow ring
+  const d = Math.hypot(fx - bowX, fy - bowY)
+  if (d <= bowOuter && d > bowInner) return true
+
+  // Shaft
+  const shaftL = bowX, shaftR = N * 0.82
+  const shaftT = N * 0.435, shaftB = N * 0.515
+  if (fx >= shaftL && fx <= shaftR && fy >= shaftT && fy <= shaftB) return true
+
+  // Three teeth below shaft — strict 1:2:3 height ratio
+  const u = N * 0.065  // one tooth unit
+  const tw = N * 0.07  // tooth width
+  const t1x = N * 0.545
+  const t2x = t1x + tw + N * 0.03
+  const t3x = t2x + tw + N * 0.03
+  if (fx >= t1x && fx <= t1x + tw && fy > shaftB && fy <= shaftB + u)       return true
+  if (fx >= t2x && fx <= t2x + tw && fy > shaftB && fy <= shaftB + u * 2)   return true
+  if (fx >= t3x && fx <= t3x + tw && fy > shaftB && fy <= shaftB + u * 3)   return true
+
+  return false
+}
+
 /** Color + coverage at a floating-point sample. Returns [r,g,b,a]. */
 function sample(fx, fy, N) {
-  const r = N * 0.22 // corner radius
-  // Rounded-rect SDF: inside if distance to the inset rect corner box <= r.
+  const r = N * 0.22
   const cx = clamp(fx, r, N - r)
   const cy = clamp(fy, r, N - r)
   const inside = Math.hypot(fx - cx, fy - cy) <= r
   if (!inside) return [0, 0, 0, 0]
 
-  // Background gradient (diagonal).
+  // Dark glass background — diagonal gradient
   const t = (fx + fy) / (2 * N)
   let col = [
-    lerp(ACCENT_A[0], ACCENT_B[0], t),
-    lerp(ACCENT_A[1], ACCENT_B[1], t),
-    lerp(ACCENT_A[2], ACCENT_B[2], t),
+    lerp(BG_A[0], BG_B[0], t),
+    lerp(BG_A[1], BG_B[1], t),
+    lerp(BG_A[2], BG_B[2], t),
   ]
 
-  // Keyhole: circle head + tapering stem.
-  const kx = N * 0.5
-  const ky = N * 0.4
-  const kr = N * 0.15
-  const inCircle = Math.hypot(fx - kx, fy - ky) <= kr
-  const stemTop = ky
-  const stemBot = N * 0.7
-  let inStem = false
-  if (fy >= stemTop && fy <= stemBot) {
-    const hw = lerp(N * 0.045, N * 0.085, (fy - stemTop) / (stemBot - stemTop))
-    inStem = Math.abs(fx - kx) <= hw
-  }
-  if (inCircle || inStem) col = [...GLYPH]
+  // Specular highlight — faint white band across top-left (matches mark-glyph style)
+  const specT = clamp(0.07 - ((fx * 0.55 + fy * 0.45) / N) * 0.22, 0, 1)
+  col = col.map(c => Math.min(255, c + Math.round(255 * specT)))
+
+  // Key glyph in signal-green
+  if (isKey(fx, fy, N)) col = [...GLYPH]
 
   return [col[0], col[1], col[2], 255]
 }

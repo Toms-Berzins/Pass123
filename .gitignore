@@ -16,6 +16,9 @@ dist/
 # Graphify knowledge graph (generated; rebuild with /graphify)
 graphify-out/
 
+# Brainstorming session files (visual companion mockups — local only)
+.superpowers/
+
 # Stray vendored viz libs extracted alongside the graph viewer
 vis-network@*/
 vis-network/
