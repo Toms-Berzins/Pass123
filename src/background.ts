@@ -44,6 +44,14 @@ const PENDING_TTL_MS = 2 * 60 * 1000
 // Window in which a captured login may still be claimed by a *different-domain*
 // landing page in the SAME tab — i.e. a submit-then-redirect across hosts. Kept
 // short so a redirect is caught but later unrelated navigation in that tab is not.
+//
+// Tradeoff: this window catches the common OAuth redirect (submit on accounts.google.com,
+// land on myapp.com) but also means any page the tab navigates to within 90 s receives
+// the captured *username* via `pendingFor` (the banner must show it). The password never
+// leaves the background worker. The risk materialises if the login host has an open
+// redirect — an attacker could chain: login-submit → open-redirect → attacker.com, and
+// the landing content script learns the username. `crossHostSurfaced` limits exposure to
+// one page. Shorten this constant (e.g. 30 s) if open-redirect risk outweighs OAuth UX.
 const CROSS_HOST_WINDOW_MS = 90 * 1000
 
 // In-memory only. Never persisted.
