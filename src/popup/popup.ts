@@ -179,6 +179,8 @@ function renderSetup(): void {
     })
   createBtn.addEventListener('click', submit)
   mp2.addEventListener('keydown', (e) => e.key === 'Enter' && submit())
+  mp.addEventListener('input', () => (err.textContent = ''))
+  mp2.addEventListener('input', () => (err.textContent = ''))
   mp.focus()
 }
 
@@ -348,6 +350,8 @@ function renderSetNewMaster(currentSecret: string): void {
     })
   setBtn.addEventListener('click', submit)
   np2.addEventListener('keydown', (e) => e.key === 'Enter' && submit())
+  np.addEventListener('input', () => (err.textContent = ''))
+  np2.addEventListener('input', () => (err.textContent = ''))
   np.focus()
 }
 
@@ -1003,6 +1007,8 @@ function renderExport(): void {
     })
   exportBtn.addEventListener('click', submit)
   ep2.addEventListener('keydown', (e) => e.key === 'Enter' && submit())
+  ep.addEventListener('input', () => (err.textContent = ''))
+  ep2.addEventListener('input', () => (err.textContent = ''))
   ep.focus()
 }
 
