@@ -23,6 +23,7 @@ import { sendMessage, type EntryMeta, type PendingInfo } from './lib/messages'
 import {
   classifyForm,
   findConfirmField,
+  findNameField,
   findNewPasswordField,
   findPasswordField,
   findUsernameField,
@@ -592,6 +593,20 @@ async function handleFieldFocus(field: HTMLInputElement): Promise<void> {
 }
 
 
+function flashIconHint(field: HTMLInputElement, msg: string): void {
+  const btn = iconButtons.get(field)
+  if (!btn) return
+  const prev = btn.title
+  btn.title = msg
+  btn.style.background = 'rgba(57,255,110,.45)'
+  btn.style.opacity = '1'
+  setTimeout(() => {
+    btn.title = prev
+    btn.style.removeProperty('background')
+    btn.style.removeProperty('opacity')
+  }, 2000)
+}
+
 async function handleIconClick(field: HTMLInputElement): Promise<void> {
   const res = await sendMessage<{ entries: EntryMeta[]; locked: boolean }>({
     type: 'matchesForHost',
@@ -599,10 +614,12 @@ async function handleIconClick(field: HTMLInputElement): Promise<void> {
   })
   // Service worker terminated (cold start) or vault not yet created → treat as locked.
   if (!res.ok || res.data.locked) {
+    flashIconHint(field, 'Pass123 is locked — click the toolbar icon to unlock')
     void sendMessage({ type: 'openPopup' })
     return
   }
   if (res.data.entries.length === 0) {
+    flashIconHint(field, 'No saved logins — click the toolbar icon to add one')
     void sendMessage({ type: 'openPopup', prefillHostname: location.hostname })
     return
   }
@@ -615,7 +632,7 @@ async function handleIconClick(field: HTMLInputElement): Promise<void> {
 }
 
 async function fillFromEntry(entryId: string): Promise<void> {
-  const res = await sendMessage<{ username: string; password: string }>({
+  const res = await sendMessage<{ username: string; password: string; name?: string }>({
     type: 'fillEntry',
     id: entryId,
   })
@@ -624,6 +641,10 @@ async function fillFromEntry(entryId: string): Promise<void> {
   const user = findUsernameField(document, pw)
   if (user) setValue(user, res.data.username)
   if (pw) setValue(pw, res.data.password)
+  if (res.data.name) {
+    const nameField = findNameField(document, user)
+    if (nameField) setValue(nameField, res.data.name)
+  }
 }
 
 function showPicker(field: HTMLInputElement, entries: EntryMeta[]): Promise<EntryMeta | null> {
@@ -671,9 +692,11 @@ function closePicker(): void {
 function rescanLoginFields(): void {
   const pw = findPasswordField(document)
   const user = findUsernameField(document, pw)
+  const nameField = findNameField(document, user)
   const current = new Set<HTMLInputElement>()
   if (pw) current.add(pw)
   if (user) current.add(user)
+  if (nameField) current.add(nameField)
   // Remove stale icons
   knownFields.forEach((f) => {
     if (!current.has(f)) {
@@ -694,8 +717,10 @@ function scheduleLoginScan(): void {
 function detectAndInjectIcons(): void {
   const pw = findPasswordField(document)
   const user = findUsernameField(document, pw)
+  const nameField = findNameField(document, user)
   if (pw) { ensureIcon(pw); attachFocusListener(pw) }
   if (user) { ensureIcon(user); attachFocusListener(user) }
+  if (nameField) { ensureIcon(nameField); attachFocusListener(nameField) }
 }
 
 // On page load (e.g. after a login navigated here), surface any pending capture.

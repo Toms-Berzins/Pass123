@@ -10,7 +10,7 @@
  */
 
 const USER_HINT = /user|email|login|account|phone|mobile|nick/i
-const NON_USER_HINT = /search|query|otp|code|totp|2fa|captcha/i
+const NON_USER_HINT = /search|query|otp|code|totp|2fa|captcha|\bname\b/i
 
 /** All the identifying text on a field, lower-cased, for heuristic matching. */
 export function fieldText(el: HTMLInputElement): string {
@@ -244,6 +244,25 @@ export function findConfirmField(root: ParentNode, newPw: HTMLInputElement): HTM
     if (!isCurrentPasswordField(pw[i])) return pw[i]
   }
   return null
+}
+
+/**
+ * Find a "real name" field (full name / given name / family name) — distinct from
+ * the username/email field. Autocomplete is authoritative; falls back to a
+ * "full name" label hint. First/last split is not handled (no split-name storage).
+ */
+export function findNameField(root: ParentNode, user: HTMLInputElement | null): HTMLInputElement | null {
+  const all = inputs(root)
+  const byAc = all.find((i) => autocompleteTokens(i).includes('name') && i !== user)
+  if (byAc) return byAc
+  return (
+    all.find(
+      (i) =>
+        (i.type === 'text' || i.type === '') &&
+        i !== user &&
+        /full[\s-]?name/i.test(hintHaystack(i)),
+    ) ?? null
+  )
 }
 
 export function findUsernameField(root: ParentNode, pw: HTMLInputElement | null): HTMLInputElement | null {

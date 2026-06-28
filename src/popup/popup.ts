@@ -774,6 +774,9 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = '', prefillUrl 
       <input id="f-user" type="text" value="${attr(e?.username)}" autocomplete="off" list="f-user-list" />
       <datalist id="f-user-list"></datalist>
     </div>
+    <div><label>Name <span class="hint">(optional)</span></label>
+      <input id="f-name" type="text" value="${attr(e?.name)}" autocomplete="off" placeholder="Full name" />
+    </div>
     <div id="f-pass-block"><label>Password</label>
       <div class="row" id="f-pass-row">
         <input id="f-pass" type="${e?.password ? 'password' : 'text'}" value="${attr(e?.password ?? presetPassword)}" />
@@ -850,6 +853,7 @@ function renderEntryForm(existing?: VaultEntry, presetPassword = '', prefillUrl 
       title: byId<HTMLInputElement>('f-title').value.trim(),
       url: byId<HTMLInputElement>('f-url').value.trim(),
       username: byId<HTMLInputElement>('f-user').value.trim(),
+      name: byId<HTMLInputElement>('f-name').value.trim() || undefined,
       password: byId<HTMLInputElement>('f-pass').value,
       notes: byId<HTMLTextAreaElement>('f-notes').value,
       totp,

@@ -77,6 +77,10 @@ export type Response<T = unknown> =
   | { ok: true; data: T }
   | { ok: false; error: string }
 
-export function sendMessage<T = unknown>(req: Request): Promise<Response<T>> {
-  return chrome.runtime.sendMessage(req) as Promise<Response<T>>
+export async function sendMessage<T = unknown>(req: Request): Promise<Response<T>> {
+  try {
+    return await (chrome.runtime.sendMessage(req) as Promise<Response<T>>)
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+  }
 }

@@ -257,7 +257,7 @@ async function handle(req: Request, tabId?: number): Promise<unknown> {
       armAutoLock()
       const entry = data.entries.find((e) => e.id === req.id)
       if (!entry) throw new Error('Entry not found')
-      return { username: entry.username, password: entry.password }
+      return { username: entry.username, password: entry.password, name: entry.name }
     }
     case 'generateForFill': {
       // Pure RNG — no vault access needed, so it works regardless of lock state.
