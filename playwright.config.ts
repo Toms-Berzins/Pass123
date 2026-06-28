@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
-  testDir: './tests/e2e',
+  testDir: './test/e2e',
   timeout: 30_000,
   fullyParallel: false,
   workers: 1,
